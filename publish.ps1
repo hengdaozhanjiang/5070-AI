@@ -15,7 +15,7 @@
 #   4. 建仓并推送
 
 param(
-    [string]$RepoName = "chengxin-huhua",
+    [string]$RepoName = "5070-AI",
     [switch]$Private
 )
 
