@@ -376,8 +376,95 @@ def spawn_in_progress(mid: str) -> bool:
     return True
 
 
-def start_model(cfg: dict) -> dict:
+def _launch(cmd: list[str], log_path: str, cwd: str | None,
+            env: dict | None, banner: str) -> dict:
+    """Spawn a service with its stdout going straight to a log file.
+
+    Shared by the chat models, SD and TTS: they differ only in the command line,
+    the working directory and any extra environment, and every one of them needs
+    the same three precautions:
+
+      * stdout to a file, never a pipe - an undrained pipe fills up and blocks
+        the child mid-startup (this is what made model loading hang);
+      * stdin DEVNULL, so a trailing `pause` in a .bat sees EOF and exits;
+      * CREATE_NO_WINDOW, so nothing flashes on screen.
+
+    Returns {"ok": bool, "message": str}; on success the caller records its own
+    "started at" timestamp.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+    try:
+        log = open(log_path, "wb", buffering=0)
+    except OSError as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"无法写入日志：{exc}"}
+    log.write(f"\n\n===== hub start {banner} "
+              f"{time.strftime('%Y-%m-%d %H:%M:%S')} =====\n".encode("utf-8"))
+    try:
+        subprocess.Popen(
+            cmd, cwd=cwd, env=env,
+            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"启动失败：{exc}"}
+    finally:
+        log.close()
+    return {"ok": True, "message": ""}
+
+
+def _free_gpu(keep_id: str = "", need_mib: int = 0,
+              wait_timeout: float = 25.0) -> dict:
+    """Stop every other GPU user, then wait for the memory to actually come back.
+
+    taskkill returning is not the same as the VRAM being released: the driver
+    needs a moment, and starting the next service before that finishes is what
+    produces an out-of-memory that looks like a model bug.
+
+    `keep_id` names the chat model to leave alone (empty means stop everything).
+    Returns {"ok": bool, "freed": [labels], "message": str}.
+    """
     global _sd_spawning, _tts_spawning  # noqa: PLW0603
+    freed: list[str] = []
+    ports: list[int] = []
+
+    for other in MODELS.values():
+        if other["id"] == keep_id:
+            continue
+        if kill_port(other["port"]):
+            freed.append(other["label"])
+            ports.append(other["port"])
+        _spawning.pop(other["id"], None)
+        _health_cache.pop(other["id"], None)
+
+    if SD.get("enabled") and kill_port(SD["port"]):
+        freed.append(SD["label"])
+        _sd_spawning = 0.0
+        ports.append(SD["port"])
+    if TTS.get("enabled") and kill_port(TTS["port"]):
+        freed.append(TTS["label"])
+        _tts_spawning = 0.0
+        ports.append(TTS["port"])
+
+    if not freed:
+        return {"ok": True, "freed": [], "message": ""}
+
+    for port in ports:
+        wait_port_free(port, timeout=15)
+
+    if need_mib:
+        mem = wait_gpu_freed(need_mib, timeout=wait_timeout)
+        if not mem.get("ok"):
+            return {
+                "ok": False, "freed": freed,
+                "message": f"显存没释放干净：当前空闲 {mem.get('free', 0)} MB"
+                           f" / 共 {mem.get('total', 0)} MB，低于需要的约 "
+                           f"{need_mib} MB。可能有别的程序占着显卡，"
+                           f"关掉再试（或重启一次）。",
+            }
+    return {"ok": True, "freed": freed, "message": ""}
+
+
+def start_model(cfg: dict) -> dict:
     mid = cfg["id"]
     if port_open(cfg["port"]) or server_pids(cfg["port"]) or spawn_in_progress(mid):
         return {"ok": True, "message": "已经在运行或正在加载"}
@@ -390,72 +477,21 @@ def start_model(cfg: dict) -> dict:
 
     # The caller already confirmed replacing whatever is loaded (see
     # _model_action); free it now so this one gets the whole card.
-    freed = []
-    for other in MODELS.values():
-        if other["id"] == mid:
-            continue
-        if kill_port(other["port"]):
-            freed.append(other["label"])
-            _spawning.pop(other["id"], None)
-            _health_cache.pop(other["id"], None)
+    # 9B needs ~7GB, 35B ~20GB - ask for a floor and report a real number.
+    need = 6000 if mid == "9b" else 12000
+    freed = _free_gpu(keep_id=mid, need_mib=need)
+    if not freed["ok"]:
+        return {"ok": False, "message": freed["message"]}
 
-    # Stable Diffusion and IndexTTS share this GPU too, so they have to go.
-    if kill_port(SD["port"]):
-        freed.append(SD["label"])
-        _sd_spawning = 0.0
-    if TTS.get("enabled") and kill_port(TTS["port"]):
-        freed.append(TTS["label"])
-        _tts_spawning = 0.0
-
-    # taskkill returning does not mean the VRAM is back. Wait for the ports to
-    # actually clear and the driver to release memory, otherwise the new model
-    # fails with an out-of-memory that looks like a model bug.
-    if freed:
-        for other in MODELS.values():
-            if other["id"] != mid:
-                wait_port_free(other["port"], timeout=15)
-        wait_port_free(SD["port"], timeout=15)
-        if TTS.get("enabled"):
-            wait_port_free(TTS["port"], timeout=15)
-        # 9B needs ~7GB, 35B ~20GB; ask for a floor and report a real number
-        need = 6000 if mid == "9b" else 12000
-        freed_mem = wait_gpu_freed(need, timeout=25)
-        if not freed_mem.get("ok"):
-            return {
-                "ok": False,
-                "message": f"显存没释放干净：当前空闲 "
-                           f"{freed_mem.get('free', 0)} MB / 共 {freed_mem.get('total', 0)} MB，"
-                           f"低于 {cfg['label']} 需要的约 {need} MB。"
-                           f"可能有别的程序占着显卡，关掉再试（或重启一次）。",
-            }
-
-    os.makedirs(LOG_DIR, exist_ok=True)
     env = os.environ.copy()
     env["PATH"] = os.path.join(UNCDIR, "bin") + os.pathsep + env.get("PATH", "")
-    # stdout must go straight to a file: llama-server logs a lot, and an
-    # undrained pipe would fill up and block the model process mid-load.
-    # stdin is DEVNULL so the trailing `pause` in the .bat sees EOF and exits.
-    try:
-        log = open(cfg["log"], "wb", buffering=0)
-    except OSError as exc:  # noqa: BLE001
-        return {"ok": False, "message": f"无法写入日志：{exc}"}
-    log.write(f"\n\n===== hub start {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n"
-              .encode("utf-8"))
-    try:
-        subprocess.Popen(
-            ["cmd", "/c", bat],
-            cwd=UNCDIR, env=env,
-            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "message": f"启动失败：{exc}"}
-    finally:
-        log.close()
+    res = _launch(["cmd", "/c", bat], cfg["log"], UNCDIR, env, cfg["label"])
+    if not res["ok"]:
+        return res
 
     _spawning[mid] = time.time()
     _health_cache.pop(mid, None)
-    note = f"（已先停掉 {', '.join(freed)}）" if freed else ""
+    note = f"（已先停掉 {', '.join(freed['freed'])}）" if freed["freed"] else ""
     return {"ok": True, "message": f"{cfg['label']} 开始加载{note}，通常 30-60 秒"}
 
 
@@ -695,16 +731,13 @@ def tts_start() -> dict:
     if not os.path.exists(os.path.join(TTS["dir"], "webui.py")):
         return {"ok": False, "message": f"找不到 webui.py：{TTS['dir']}"}
 
-    freed = stop_all_models()          # one GPU, so the others must go
+    freed = _free_gpu(need_mib=9000)   # one GPU, so the others must go
+    if not freed["ok"]:
+        return {"ok": False, "message": freed["message"]}
+
     os.makedirs(TTS["user_voices"], exist_ok=True)
-    os.makedirs(LOG_DIR, exist_ok=True)
-    try:
-        log = open(TTS["log"], "wb", buffering=0)
-    except OSError as exc:  # noqa: BLE001
-        return {"ok": False, "message": f"无法写入日志：{exc}"}
-    log.write(f"\n\n===== hub start TTS {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n"
-              .encode("utf-8"))
     env = os.environ.copy()
+    # use the mirror so first-run model fetching works behind the GFW
     env["HF_ENDPOINT"] = "https://hf-mirror.com"
     env["HF_HOME"] = os.path.join(TTS["dir"], ".huggingface")
     launcher = TTS.get("launcher")
@@ -712,20 +745,13 @@ def tts_start() -> dict:
         cmd = [py, launcher, TTS["dir"], *TTS["args"]]
     else:
         cmd = [py, os.path.join(TTS["dir"], "webui.py"), *TTS["args"]]
-    try:
-        subprocess.Popen(
-            cmd,
-            cwd=TTS["dir"], env=env, stdin=subprocess.DEVNULL,
-            stdout=log, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "message": f"启动失败：{exc}"}
-    finally:
-        log.close()
+
+    res = _launch(cmd, TTS["log"], TTS["dir"], env, "TTS")
+    if not res["ok"]:
+        return res
 
     _tts_spawning = time.time()
-    note = f"（已卸载 {'、'.join(freed)}）" if freed else ""
+    note = f"（已卸载 {'、'.join(freed['freed'])}）" if freed["freed"] else ""
     return {"ok": True, "message": f"语音合成开始启动{note}，首次加载要 1-3 分钟"}
 
 
@@ -774,47 +800,28 @@ def _tts_upload(path: str) -> str | None:
     return None
 
 
-def tts_speak(payload: dict) -> dict:
-    """Generate speech for `text` using a reference voice.
+def _pick_voice(name: str) -> str:
+    """Resolve a voice name to a file path; falls back to the default voice."""
+    wanted = (name or "").strip()
+    voices = tts_voices()
+    if wanted:
+        for v in voices:
+            if v["name"] == wanted:
+                return v["path"]
+    # tts_voices() puts the user's default first
+    return voices[0]["path"] if voices else ""
 
-    Talks to the IndexTTS Gradio app over its own queue: POST the text plus the
-    reference-audio path, then poll the event stream until the audio lands in
-    outputs/. The result is returned as a path the browser can play.
+
+def _tts_args(text: str, uploaded: str) -> list:
+    """The 24 positional values gen_single expects, in UI declaration order.
+
+    Gradio refuses local paths it did not receive through its upload endpoint,
+    so `uploaded` must be the server-side copy returned by _tts_upload.
     """
-    text = str(payload.get("text") or "").strip()
-    if not text:
-        return {"ok": False, "message": "没有要朗读的文字"}
-    if not port_open(TTS["port"]):
-        return {"ok": False, "message": "语音合成没有在运行，先点“启动”"}
-
-    voice = str(payload.get("voice") or "").strip()
-    voice_path = ""
-    if voice:
-        for v in tts_voices():
-            if v["name"] == voice:
-                voice_path = v["path"]
-                break
-    if not voice_path:
-        voices = tts_voices()
-        if not voices:
-            return {"ok": False, "message": "没有可用的参考音频：把一段 wav 放到 data/voices 里"}
-        voice_path = voices[0]["path"]  # tts_voices() puts the default first
-
-    # The gen_single handler takes 24 positional values, in the order the UI
-    # declares them (radio, reference audio, text, emotion audio, weight,
-    # 8 emotion sliders, emotion text, random flag, segment size, then the
-    # sampling knobs). The defaults below mirror the WebUI's own values.
-    # Gradio refuses local paths that it did not receive through its own upload
-    # endpoint ("not uploaded by a user"), so send the reference audio first and
-    # use the server-side copy it hands back.
-    uploaded = _tts_upload(voice_path)
-    if not uploaded:
-        return {"ok": False, "message": "参考音频上传失败，检查文件是否可读"}
-
     def file_data(path: str) -> dict:
         return {"path": path, "meta": {"_type": "gradio.FileData"}}
 
-    payload_data = [
+    return [
         "与音色参考音频相同",   # 0  emotion control: follow the reference voice
         file_data(uploaded),   # 1  音色参考音频 (cloning prompt)
         text,                  # 2  要合成的文字
@@ -835,113 +842,115 @@ def tts_speak(payload: dict) -> dict:
         1500,                  # 23 max_mel_tokens
     ]
 
-    # Gradio 5 uses a two-step call: POST the arguments to get an event id, then
-    # open the per-event stream. The stream carries `progress` events as the
-    # model works, which we forward to JOBS so the UI can show a percentage.
-    base = f"http://{HOST}:{TTS['port']}"
-    job_begin("tts", label=text[:40])
-    try:
-        req = urllib.request.Request(
-            f"{base}/gradio_api/call/gen_single",
-            data=json.dumps({"data": payload_data}).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=120) as r:
-            started = json.loads(r.read().decode("utf-8", "replace"))
-        event_id = started.get("event_id")
-        if not event_id:
-            job_finish("tts", error="no event id")
-            return {"ok": False, "message": f"没有拿到 event_id：{started}"}
 
-        result = None
-        error_line = None
-        # IndexTTS reports no progress of its own: the stream carries only
-        # heartbeats until the final `complete`. Estimate from elapsed time and
-        # the model's own log so the bar still moves instead of sitting at 5%.
-        log_path = TTS["log"]
-        log_start = 0
+class _ProgressTicker:
+    """Estimate TTS progress while Gradio sends nothing but heartbeats.
+
+    IndexTTS reports no progress of its own, so we read our own log to learn
+    which stage it reached and advance a percentage over time. Deliberately
+    rough: the UI labels it as an estimate.
+    """
+
+    def __init__(self, log_path: str, start_offset: int = 0):
+        self.log_path = log_path
+        self.offset = start_offset
+        self._stop = threading.Event()
+        self._value = 0.10
+        self._thread: threading.Thread | None = None
+
+    def _stage(self) -> str:
         try:
-            log_start = os.path.getsize(log_path)
+            with open(self.log_path, "rb") as fh:
+                fh.seek(self.offset)
+                tail = fh.read().decode("utf-8", "replace")
         except OSError:
-            pass
-        est = 0.10
-        job_set("tts", progress=est, label="加载模型")
-        # a background ticker advances the estimate between heartbeats, since
-        # Gradio may send nothing for 5 s at a time
-        stop_tick = threading.Event()
+            return ""
+        if "starting inference" in tail:
+            return "inference"
+        if "weights restored" in tail or "loaded" in tail:
+            return "loading"
+        return ""
 
-        def ticker() -> None:
-            nonlocal est
-            while not stop_tick.wait(0.5):
-                stage = ""
-                try:
-                    with open(log_path, "rb") as fh:
-                        fh.seek(log_start)
-                        tail = fh.read().decode("utf-8", "replace")
-                    if "starting inference" in tail:
-                        stage = "inference"
-                    elif "weights restored" in tail or "loaded" in tail:
-                        stage = "loading"
-                except OSError:
-                    pass
-                # a short sentence finishes in ~10 s, a long one in ~40 s, so
-                # nudge faster once inference is actually running
-                if stage == "inference":
-                    est = min(0.95, max(0.45, est) + 0.035)
-                    job_set("tts", progress=est, label="正在合成语音")
-                elif stage == "loading":
-                    est = min(0.44, est + 0.010)
-                    job_set("tts", progress=est, label="加载模型")
-                else:
-                    est = min(0.40, est + 0.012)
-                    job_set("tts", progress=est, label="准备中")
+    def _run(self) -> None:
+        while not self._stop.wait(0.5):
+            stage = self._stage()
+            # a short sentence finishes in ~10 s, a long one in ~40 s, so nudge
+            # faster once inference is actually running
+            if stage == "inference":
+                self._value = min(0.95, max(0.45, self._value) + 0.035)
+                job_set("tts", progress=self._value, label="正在合成语音")
+            elif stage == "loading":
+                self._value = min(0.44, self._value + 0.010)
+                job_set("tts", progress=self._value, label="加载模型")
+            else:
+                self._value = min(0.40, self._value + 0.012)
+                job_set("tts", progress=self._value, label="准备中")
 
-        threading.Thread(target=ticker, daemon=True).start()
-        stream = None
-        try:
-            stream = urllib.request.urlopen(
-                f"{base}/gradio_api/call/gen_single/{event_id}", timeout=900)
-            event = ""
-            data_parts: list[str] = []
-            for raw_line in stream:
-                line = raw_line.decode("utf-8", "replace").rstrip("\r\n")
-                if line == "":
-                    # end of one SSE block
-                    if event == "error":
-                        error_line = "\n".join(data_parts)[:300]
-                        break
-                    if event in ("generating", "complete") and data_parts:
-                        payload_txt = "\n".join(data_parts)
-                        try:
-                            parsed = json.loads(payload_txt)
-                        except Exception:  # noqa: BLE001
-                            parsed = None
-                        if isinstance(parsed, list) and parsed and event == "complete":
-                            result = parsed
-                    event = ""
-                    data_parts = []
-                    continue
-                if line.startswith("event:"):
-                    event = line[6:].strip()
-                elif line.startswith("data:"):
-                    data_parts.append(line[5:].strip())
-        finally:
-            # both must run on every path, or the ticker thread leaks and the
-            # bar keeps moving after the job has already failed
-            stop_tick.set()
-            if stream is not None:
-                try:
-                    stream.close()
-                except Exception:  # noqa: BLE001
-                    pass
-        job_set("tts", progress=0.97, label="收尾")
-    except Exception as exc:  # noqa: BLE001
-        job_finish("tts", error=str(exc)[:200])
-        return {"ok": False, "message": f"合成失败：{exc}。点“日志”看详细原因"}
+    def start(self) -> None:
+        job_set("tts", progress=self._value, label="加载模型")
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+def _tts_stream(base: str, event_id: str, ticker: _ProgressTicker) -> dict:
+    """Read Gradio's SSE stream until the audio block arrives.
+
+    Returns {"ok": bool, "result": list|None, "message": str}. Always stops the
+    ticker and closes the stream, including on the error paths - a leaked ticker
+    would keep moving the bar after the job already failed.
+    """
+    stream = None
+    result = None
+    error_line = None
+    try:
+        stream = urllib.request.urlopen(
+            f"{base}/gradio_api/call/gen_single/{event_id}", timeout=900)
+        event = ""
+        data_parts: list[str] = []
+        for raw_line in stream:
+            line = raw_line.decode("utf-8", "replace").rstrip("\r\n")
+            if line == "":
+                # end of one SSE block
+                if event == "error":
+                    error_line = "\n".join(data_parts)[:300]
+                    break
+                if event in ("generating", "complete") and data_parts:
+                    try:
+                        parsed = json.loads("\n".join(data_parts))
+                    except Exception:  # noqa: BLE001
+                        parsed = None
+                    if isinstance(parsed, list) and parsed and event == "complete":
+                        result = parsed
+                event = ""
+                data_parts = []
+                continue
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data_parts.append(line[5:].strip())
+    finally:
+        ticker.stop()
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     if error_line:
-        job_finish("tts", error=error_line)
-        return {"ok": False, "message": f"合成出错：{error_line}"}
+        return {"ok": False, "result": None, "message": f"合成出错：{error_line}"}
+    return {"ok": True, "result": result, "message": ""}
 
+
+def _tts_resolve_audio(result: list | None) -> str:
+    """Turn gen_single's output into an absolute path on disk.
+
+    Gradio may echo the file, or finish without it (in which case the newest
+    fresh wav under outputs/ is ours). It hands back either a plain path or a
+    file://-style URL.
+    """
     audio = None
     if result:
         first = result[0]
@@ -950,12 +959,9 @@ def tts_speak(payload: dict) -> dict:
         elif isinstance(first, str):
             audio = first
 
-    # Gradio sometimes completes without echoing the file, so fall back to the
-    # newest wav the model just wrote
     if not audio:
         outdir = os.path.join(TTS["dir"], "outputs")
-        newest = None
-        newest_mtime = 0.0
+        newest, newest_mtime = None, 0.0
         try:
             for name in os.listdir(outdir):
                 if not name.lower().endswith(".wav"):
@@ -969,10 +975,10 @@ def tts_speak(payload: dict) -> dict:
         # only trust it if it is fresh (generated by this call)
         if newest and (time.time() - newest_mtime) < 900:
             audio = newest
+
     if not audio:
-        job_finish("tts", error="no audio in result")
-        return {"ok": False, "message": "没有拿到音频结果"}
-    # Gradio hands back either a path or a file URL
+        return ""
+
     path = str(audio)
     if path.startswith("file://"):
         path = path[7:]
@@ -980,20 +986,82 @@ def tts_speak(payload: dict) -> dict:
         path = path[6:]
     if not os.path.isabs(path):
         path = os.path.join(TTS["dir"], path.lstrip("/\\"))
-    if not os.path.exists(path):
-        job_finish("tts", error=f"missing {path}")
-        return {"ok": False, "message": f"音频文件不存在：{path}"}
+    return path if os.path.exists(path) else ""
+
+
+def tts_speak(payload: dict) -> dict:
+    """Generate speech for `text` with the chosen reference voice.
+
+    Pipeline, each step in its own helper:
+      1. _pick_voice      - which reference wav to clone
+      2. _tts_upload      - Gradio only accepts files it uploaded itself
+      3. _tts_args        - the 24 positional parameters gen_single wants
+      4. POST /gradio_api/call/gen_single -> event id
+      5. _tts_stream      - read SSE (with an estimated progress ticker)
+      6. _tts_resolve_audio - find the produced wav
+      7. copy into data/speech so /audio/<name> can serve it
+    """
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "message": "没有要朗读的文字"}
+    if not port_open(TTS["port"]):
+        return {"ok": False, "message": "语音合成没有在运行，先点“启动”"}
+
+    voice_path = _pick_voice(str(payload.get("voice") or ""))
+    if not voice_path:
+        return {"ok": False, "message": "没有可用的参考音频：把一段 wav 放到 data/voices 里"}
+
+    uploaded = _tts_upload(voice_path)
+    if not uploaded:
+        return {"ok": False, "message": "参考音频上传失败，检查文件是否可读"}
+
+    base = f"http://{HOST}:{TTS['port']}"
+    job_begin("tts", label=text[:40])
+
+    try:
+        req = urllib.request.Request(
+            f"{base}/gradio_api/call/gen_single",
+            data=json.dumps({"data": _tts_args(text, uploaded)}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=120) as r:
+            started = json.loads(r.read().decode("utf-8", "replace"))
+        event_id = started.get("event_id")
+        if not event_id:
+            job_finish("tts", error="no event id")
+            return {"ok": False, "message": f"没有拿到 event_id：{started}"}
+
+        try:
+            log_start = os.path.getsize(TTS["log"])
+        except OSError:
+            log_start = 0
+        ticker = _ProgressTicker(TTS["log"], log_start)
+        ticker.start()
+
+        streamed = _tts_stream(base, event_id, ticker)
+        if not streamed["ok"]:
+            job_finish("tts", error=streamed["message"])
+            return {"ok": False, "message": streamed["message"]}
+        job_set("tts", progress=0.97, label="收尾")
+    except Exception as exc:  # noqa: BLE001
+        job_finish("tts", error=str(exc)[:200])
+        return {"ok": False, "message": f"合成失败：{exc}。点“日志”看详细原因"}
+
+    path = _tts_resolve_audio(streamed["result"])
+    if not path:
+        job_finish("tts", error="no audio in result")
+        return {"ok": False, "message": "没有拿到音频结果"}
 
     # copy it next to the app so the browser can fetch it through /audio/<name>
     os.makedirs(SPEECH_DIR, exist_ok=True)
-    base = f"speech-{time.strftime('%Y%m%d-%H%M%S')}.wav"
-    dest = os.path.join(SPEECH_DIR, base)
+    name = f"speech-{time.strftime('%Y%m%d-%H%M%S')}.wav"
+    dest = os.path.join(SPEECH_DIR, name)
     try:
         shutil.copyfile(path, dest)
     except OSError as exc:  # noqa: BLE001
         job_finish("tts", error=str(exc)[:120])
         return {"ok": False, "message": f"无法复制音频：{exc}"}
-    out = {"ok": True, "path": dest, "url": f"/audio/{base}",
+
+    out = {"ok": True, "path": dest, "url": f"/audio/{name}",
            "bytes": os.path.getsize(dest), "text": text, "voice": voice_path,
            "message": "已生成"}
     job_finish("tts", result={"ok": True, "url": out["url"],
@@ -1087,30 +1155,17 @@ def sd_start() -> dict:
     if not os.path.exists(os.path.join(SD["dir"], "launch.py")):
         return {"ok": False, "message": f"找不到 launch.py：{SD['dir']}"}
 
-    # One GPU: SD needs the whole card, so the chat models must go.
-    freed = stop_all_models()
+    # One GPU: SD needs the whole card, so everything else must go.
+    freed = _free_gpu(need_mib=8000)
+    if not freed["ok"]:
+        return {"ok": False, "message": freed["message"]}
 
-    os.makedirs(LOG_DIR, exist_ok=True)
-    try:
-        log = open(SD["log"], "wb", buffering=0)
-    except OSError as exc:  # noqa: BLE001
-        return {"ok": False, "message": f"无法写入日志：{exc}"}
-    log.write(f"\n\n===== hub start SD {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n"
-              .encode("utf-8"))
-    try:
-        subprocess.Popen(
-            [py, *SD["args"]],
-            cwd=SD["dir"], stdin=subprocess.DEVNULL,
-            stdout=log, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "message": f"启动失败：{exc}"}
-    finally:
-        log.close()
+    res = _launch([py, *SD["args"]], SD["log"], SD["dir"], None, "SD")
+    if not res["ok"]:
+        return res
 
     _sd_spawning = time.time()
-    note = f"（已卸载 {'、'.join(freed)}）" if freed else ""
+    note = f"（已卸载 {'、'.join(freed['freed'])}）" if freed["freed"] else ""
     return {"ok": True,
             "message": f"SD 开始启动{note}，首次启动可能要 1-3 分钟"}
 
