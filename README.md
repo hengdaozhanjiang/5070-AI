@@ -184,6 +184,21 @@ Hugging Face 直连慢的话，在配置里换成镜像：
 
 **注意**：不同机构发布的 GGUF 量化版本质量差异不小。同一个模型，Q4_K_M 和 Q6_K 在长文推理上的表现能差出可感知的距离。挑的时候看一下发布者的说明。
 
+**已验证可用的来源**
+
+开发时用的两个模型都能在 Hugging Face 找到（均为 Apache-2.0、非 gated）：
+
+| 模型 | 仓库 | 文件 |
+|---|---|---|
+| 9B Q6_K | `llmfan46/Qwen3.5-9B-Ultra-Uncensored-Heretic-GGUF` | `Qwen3.5-9B-Ultra-Uncensored-Heretic-Q6_K.gguf` (7.4GB) |
+| 9B mmproj | 同上 | `Qwen3.5-9B-mmproj-BF16.gguf` (0.9GB) |
+| 35B Q4_K_M | `JunLee88999/Qwen3.5-35B-A3B-heretic-v2-GGUF` | `Qwen3.5-35B-A3B-heretic-v2-Q4_K_M.gguf` (21GB) |
+| 35B mmproj | 同上 | `Qwen3.5-35B-A3B-mmproj-BF16.gguf` (0.9GB) |
+
+这两个是**去除安全限制**的社区版本。仓库只是提供下载便利，不代表推荐——用在什么场景、要不要用，请你自己判断。想换正经版本的话，把 `hf_repo` 改成对应的官方发布即可。
+
+实测下载 879MB 的 mmproj 用 74 秒（约 12 MB/s），下载后直接启动正常。
+
 ---
 
 ## 快速开始

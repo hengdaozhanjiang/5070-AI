@@ -27,6 +27,7 @@
       "hf_repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
       "hf_file": "qwen2.5-7b-instruct-q4_k_m.gguf",
       "mmproj_hf_file": "",
+      "_note": "上面给的是一个普通示例。如果想复现开发时用的模型，把这组填进去（Apache-2.0）：hf_repo=llmfan46/Qwen3.5-9B-Ultra-Uncensored-Heretic-GGUF, hf_file=Qwen3.5-9B-Ultra-Uncensored-Heretic-Q6_K.gguf, mmproj_hf_file=Qwen3.5-9B-mmproj-BF16.gguf。注意这是去除安全限制的版本，请自行判断是否适合你的用途。",
 
       "about": "9B 稠密模型，40K 上下文，首字延迟最低，日常默认用它。"
     },
@@ -47,6 +48,7 @@
       "hf_repo": "",
       "hf_file": "",
       "mmproj_hf_file": "",
+      "_note": "开发时用的是 JunLee88999/Qwen3.5-35B-A3B-heretic-v2-GGUF，hf_file=Qwen3.5-35B-A3B-heretic-v2-Q4_K_M.gguf，mmproj_hf_file=Qwen3.5-35B-A3B-mmproj-BF16.gguf（Apache-2.0，21GB）。",
 
       "about": "MoE 结构，体积大但每 token 只激活部分专家，速度接近小模型，知识面更广。"
     }
