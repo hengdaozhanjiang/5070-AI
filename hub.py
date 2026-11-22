@@ -167,6 +167,43 @@ SD_STYLE_GUARD = ((CFG.get("sd") or {}).get("style_guard")
 # per-checkpoint display name / note for the drawing panel
 SD_MODEL_INFO = ((CFG.get("sd") or {}).get("checkpoints") or {})
 
+
+def config_problems() -> list[str]:
+    """Catch the mistakes that would otherwise surface as a confusing failure.
+
+    Ports are declared twice (once here, once inside each .bat), so a typo shows
+    up as "hub started it but nothing is listening" instead of an obvious error.
+    Check the cheap things up front and report them in the UI.
+    """
+    out = []
+    seen: dict[int, str] = {}
+    for cfg in MODELS.values():
+        port = cfg["port"]
+        if not 1 <= port <= 65535:
+            out.append(f"{cfg['label']} 的端口 {port} 不合法")
+            continue
+        if port in seen:
+            out.append(f"端口 {port} 被 {seen[port]} 和 {cfg['label']} 同时使用")
+        seen[port] = cfg["label"]
+        if not cfg["bat"]:
+            out.append(f"{cfg['label']} 没配置启动脚本（bat）")
+        elif not os.path.exists(cfg["bat"]):
+            out.append(f"{cfg['label']} 的启动脚本不存在：{cfg['bat']}")
+        if not cfg["model"]:
+            out.append(f"{cfg['label']} 没配置模型文件（model）")
+    for name, cfg in (("SD", SD), ("语音合成", TTS)):
+        if not cfg.get("enabled"):
+            continue
+        port = cfg["port"]
+        if port in seen:
+            out.append(f"端口 {port} 被 {seen[port]} 和 {name} 同时使用")
+        seen[port] = name
+        if not cfg.get("dir"):
+            out.append(f"{name} 没配置安装目录（dir），功能不可用")
+    if PORT in seen:
+        out.append(f"端口 {PORT} 被 hub 自己和 {seen[PORT]} 同时使用")
+    return out
+
 HTTP_TIMEOUT_DOWNLOAD = 3600      # one big prefill may take minutes
 _spawn_lock = threading.Lock()
 
@@ -211,6 +248,58 @@ def kill_port(port: int) -> list[int]:
     return killed
 
 
+def wait_port_free(port: int, timeout: float = 20.0) -> bool:
+    """Block until `port` stops listening.
+
+    taskkill returning is not the same as the process being gone: llama-server
+    keeps its socket for a moment and, more importantly, the driver has not
+    released the VRAM yet. Starting the next model before that finishes is what
+    makes a swap fail with "out of memory" on a single card.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not port_open(port) and not server_pids(port):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def gpu_memory() -> dict | None:
+    """Free/total VRAM in MiB, or None when nvidia-smi is unavailable."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total,memory.used,memory.free",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=8,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        ).stdout.strip()
+        if not out:
+            return None
+        first = out.splitlines()[0]
+        total, used, free = (int(x.strip()) for x in first.split(",")[:3])
+        return {"total": total, "used": used, "free": free}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def wait_gpu_freed(min_free_mib: int, timeout: float = 25.0) -> dict:
+    """Wait until at least `min_free_mib` is available.
+
+    Returns {"ok": bool, "free": int, "total": int}. When nvidia-smi is missing
+    we cannot judge, so report ok and let the launch decide.
+    """
+    mem = gpu_memory()
+    if mem is None:
+        return {"ok": True, "free": 0, "total": 0, "unknown": True}
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if mem["free"] >= min_free_mib:
+            return {"ok": True, **mem}
+        time.sleep(0.5)
+        mem = gpu_memory() or mem
+    return {"ok": mem["free"] >= min_free_mib, **mem}
+
+
 # --------------------------------------------------------------------------
 # health probing
 # --------------------------------------------------------------------------
@@ -240,7 +329,14 @@ def probe(cfg: dict, fresh: bool = False) -> dict:
                              (cfg.get("hf_repo") and cfg.get("hf_file"))),
     }
     if not port_open(port):
-        state["loading"] = spawn_in_progress(mid)
+        # a load that never binds its port is the classic "stuck in 加载中"
+        dead = check_spawn_health(cfg)
+        if dead:
+            state["error"] = dead["error"]
+            state["loading"] = False
+            state["dead"] = True
+        else:
+            state["loading"] = spawn_in_progress(mid)
     else:
         # a bound port without a working API means the weights are still loading
         try:
@@ -281,7 +377,7 @@ def spawn_in_progress(mid: str) -> bool:
 
 
 def start_model(cfg: dict) -> dict:
-    global _sd_spawning  # noqa: PLW0603
+    global _sd_spawning, _tts_spawning  # noqa: PLW0603
     mid = cfg["id"]
     if port_open(cfg["port"]) or server_pids(cfg["port"]) or spawn_in_progress(mid):
         return {"ok": True, "message": "已经在运行或正在加载"}
@@ -303,10 +399,35 @@ def start_model(cfg: dict) -> dict:
             _spawning.pop(other["id"], None)
             _health_cache.pop(other["id"], None)
 
-    # Stable Diffusion shares this GPU too, so it has to go as well.
+    # Stable Diffusion and IndexTTS share this GPU too, so they have to go.
     if kill_port(SD["port"]):
         freed.append(SD["label"])
         _sd_spawning = 0.0
+    if TTS.get("enabled") and kill_port(TTS["port"]):
+        freed.append(TTS["label"])
+        _tts_spawning = 0.0
+
+    # taskkill returning does not mean the VRAM is back. Wait for the ports to
+    # actually clear and the driver to release memory, otherwise the new model
+    # fails with an out-of-memory that looks like a model bug.
+    if freed:
+        for other in MODELS.values():
+            if other["id"] != mid:
+                wait_port_free(other["port"], timeout=15)
+        wait_port_free(SD["port"], timeout=15)
+        if TTS.get("enabled"):
+            wait_port_free(TTS["port"], timeout=15)
+        # 9B needs ~7GB, 35B ~20GB; ask for a floor and report a real number
+        need = 6000 if mid == "9b" else 12000
+        freed_mem = wait_gpu_freed(need, timeout=25)
+        if not freed_mem.get("ok"):
+            return {
+                "ok": False,
+                "message": f"显存没释放干净：当前空闲 "
+                           f"{freed_mem.get('free', 0)} MB / 共 {freed_mem.get('total', 0)} MB，"
+                           f"低于 {cfg['label']} 需要的约 {need} MB。"
+                           f"可能有别的程序占着显卡，关掉再试（或重启一次）。",
+            }
 
     os.makedirs(LOG_DIR, exist_ok=True)
     env = os.environ.copy()
@@ -338,6 +459,38 @@ def start_model(cfg: dict) -> dict:
     return {"ok": True, "message": f"{cfg['label']} 开始加载{note}，通常 30-60 秒"}
 
 
+def spawn_timeout(cfg: dict) -> float:
+    """How long a model may sit in "loading" before we call it dead."""
+    return 180.0 if cfg["id"] == "35b" else 120.0
+
+
+def check_spawn_health(cfg: dict) -> dict | None:
+    """Report a stuck or crashed load instead of showing "加载中" forever.
+
+    Returns None while it is still plausibly loading, or a dict describing the
+    failure. Called from probe() so every poll benefits.
+    """
+    mid = cfg["id"]
+    started = _spawning.get(mid)
+    if not started:
+        return None
+    if port_open(cfg["port"]):
+        return None                      # it bound the port, give it time to answer
+    elapsed = time.time() - started
+    if elapsed < spawn_timeout(cfg):
+        return None
+
+    # too long: see whether the process is even alive
+    alive = bool(server_pids(cfg["port"]))
+    _spawning.pop(mid, None)
+    _health_cache.pop(mid, None)
+    if not alive:
+        return {"error": "启动失败：进程已退出，看日志确认原因",
+                "hint": "log"}
+    return {"error": f"加载超时（{int(elapsed)} 秒仍未就绪），可能是显存不足",
+            "hint": "log"}
+
+
 def stop_model(cfg: dict) -> dict:
     mid, port = cfg["id"], cfg["port"]
     killed = kill_port(port)
@@ -345,7 +498,17 @@ def stop_model(cfg: dict) -> dict:
     _health_cache.pop(mid, None)
     if not killed:
         return {"ok": True, "message": "本来就没在运行"}
-    return {"ok": True, "message": f"已停止（PID {', '.join(map(str, killed))}）"}
+    # confirm the port is really gone so the next start sees a clean slate
+    gone = wait_port_free(port, timeout=15)
+    mem = gpu_memory()
+    tail = ""
+    if mem:
+        tail = f"，现存空闲 {mem['free']} MB"
+    if not gone:
+        return {"ok": False,
+                "message": f"已发送停止指令（PID {', '.join(map(str, killed))}），"
+                           f"但端口 {port} 仍被占用，稍等几秒再试"}
+    return {"ok": True, "message": f"已停止（PID {', '.join(map(str, killed))}）{tail}"}
 
 
 # --------------------------------------------------------------------------
@@ -1571,7 +1734,9 @@ class Handler(BaseHTTPRequestHandler):
                 "models": [probe(c) for c in MODELS.values()],
                 "sd": sd_probe(),
                 "tts": tts_probe(),
-                "hub": {"port": PORT, "version": "1.0"},
+                "hub": {"port": PORT, "version": "1.0",
+                        # configuration mistakes worth showing in the UI
+                        "problems": config_problems()},
             })
         elif path == "/api/log":
             self._serve_log()
@@ -2120,6 +2285,13 @@ def stop_all_models() -> list[str]:
     if kill_port(TTS["port"]):
         stopped.append(TTS["label"])
         _tts_spawning = 0.0
+    # give the driver a moment to hand the memory back; SD/TTS starting right
+    # after this would otherwise race the teardown and hit an OOM
+    if stopped:
+        for cfg in MODELS.values():
+            wait_port_free(cfg["port"], timeout=10)
+        wait_port_free(SD["port"], timeout=10)
+        wait_port_free(TTS["port"], timeout=10)
     return stopped
 
 

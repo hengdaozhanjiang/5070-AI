@@ -14,6 +14,7 @@ Two reasons this is a separate file rather than a few lines in hub.py:
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 import urllib.error
@@ -139,10 +140,64 @@ def download(url: str, dest: str, on_progress=None, on_log=None) -> dict:
     except OSError as exc:  # noqa: BLE001
         return {"ok": False, "message": f"重命名失败：{exc}"}
 
+    # a finished transfer is not the same as a usable file
+    check = verify(dest, expect_bytes=total)
+    if not check.get("ok"):
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        return {"ok": False, "message": f"下载的文件有问题：{check['message']}（已删除）"}
+
     elapsed = max(0.001, time.time() - started)
     avg = (written - have) / elapsed
     return {"ok": True, "path": dest, "bytes": written,
             "message": f"完成：{human(written)}，平均 {human(avg)}/s"}
+
+
+def verify(path: str, expect_bytes: int = 0) -> dict:
+    """Sanity-check a finished download.
+
+    A name match is not proof: a truncated transfer or the wrong quantisation
+    both leave a plausible-looking file. Catch what is cheap to catch:
+
+    * size against what the server advertised (when we know it)
+    * a GGUF filesystem header for .gguf files
+    * a JSON parse for .json files
+
+    A full sha256 would be better but the upstream repos do not publish digests
+    for every file, so this is the honest middle ground.
+    """
+    if not os.path.exists(path):
+        return {"ok": False, "message": "文件不存在"}
+    size = os.path.getsize(path)
+    if size == 0:
+        return {"ok": False, "message": "文件是空的"}
+    if expect_bytes and size != expect_bytes:
+        return {"ok": False,
+                "message": f"大小不符：得到 {human(size)}，应为 {human(expect_bytes)}"}
+
+    lower = path.lower()
+    if lower.endswith(".gguf"):
+        try:
+            with open(path, "rb") as fh:
+                magic = fh.read(4)
+        except OSError as exc:  # noqa: BLE001
+            return {"ok": False, "message": f"读不了：{exc}"}
+        if magic != b"GGUF":
+            return {"ok": False,
+                    "message": f"不是有效的 GGUF（文件头是 {magic!r}）"}
+        return {"ok": True, "bytes": size}
+
+    if lower.endswith(".json"):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                json.load(fh)
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "message": "JSON 解析失败，可能是下载不完整"}
+        return {"ok": True, "bytes": size}
+
+    return {"ok": True, "bytes": size}
 
 
 def missing(spec: dict) -> list[tuple[str, str]]:
