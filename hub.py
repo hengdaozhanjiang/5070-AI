@@ -1682,7 +1682,7 @@ ALLOWED_HOSTS = {f"{HOST}:{PORT}", f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "ChengXin/1.0"
+    server_version = "5070-AI/1.0"
 
     # -- logging ---------------------------------------------------------
     def log_message(self, fmt, *args):  # noqa: A003 - base class signature

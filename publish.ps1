@@ -4,7 +4,7 @@
 #     gh auth login
 #
 # 然后运行本脚本：
-#     .\publish.ps1                    # 仓库名默认 chengxin-huhua
+#     .\publish.ps1                    # 仓库名默认 5070-AI
 #     .\publish.ps1 -RepoName my-name  # 自定义仓库名
 #     .\publish.ps1 -Private           # 建成私有仓库
 #

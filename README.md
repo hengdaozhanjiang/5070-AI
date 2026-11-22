@@ -1,10 +1,12 @@
-# 橙芯绘话
+# 橙芯绘话（5070-AI）
 
 本地运行的对话 + 绘图 + 语音工作台。一个窗口里同时管着四个模型服务，按需启动，界面统一。
 
 因为只有一张 12GB 显卡，**三个占显存的 GPU 服务同一时刻只能跑一个**（9B、35B、SD、TTS 四选一，其中 9B 和 35B 本来就互斥）。软件会替你把这件事管好：启动新的之前先问你要不要卸载旧的，绝不会偷偷换模型把显存撑爆。
 
 翻译服务是例外：它跑在 CPU 上，只占约 300MB 内存，可以和任何 GPU 服务同时工作。
+
+> 仓库名 **5070-AI** 来自开发时用的那张 RTX 5070——项目要解决的核心问题就是「一张卡怎么安排这么多模型」。界面里显示的名字是**橙芯绘话**。
 
 ![对话界面](docs/screenshot-chat.png)
 
@@ -58,8 +60,8 @@
 **步骤**
 
 ```bash
-git clone https://github.com/<your-name>/chengxin-huhua.git
-cd chengxin-huhua
+git clone https://github.com/hengdaozhanjiang/5070-AI.git
+cd 5070-AI
 ```
 
 复制配置模板，然后按你自己的路径改：
@@ -448,7 +450,7 @@ IndexTTS **不上报进度**（实测它的数据流只发心跳，没有 progre
 ## 文件与数据
 
 ```
-chengxin-huhua\
+5070-AI\
 ├─ hub.py              主程序（后端 + 静态服务 + 反向代理）
 ├─ config.py           配置加载（config.json + 环境变量覆盖）
 ├─ config.example.json 配置模板，复制成 config.json 再改
@@ -649,7 +651,7 @@ gh auth login
 然后：
 
 ```powershell
-.\publish.ps1                    # 仓库名默认 chengxin-huhua
+.\publish.ps1                    # 仓库名默认 5070-AI
 .\publish.ps1 -RepoName my-tool  # 自定义名字
 .\publish.ps1 -Private           # 建私有仓库
 ```

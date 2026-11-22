@@ -80,7 +80,7 @@ def download(url: str, dest: str, on_progress=None, on_log=None) -> dict:
         return {"ok": True, "path": dest, "bytes": _existing_size(dest),
                 "message": "文件已存在"}
 
-    headers = {"User-Agent": "chengxin-huhua/1.0"}
+    headers = {"User-Agent": "5070-AI/1.0"}
     if have:
         headers["Range"] = f"bytes={have}-"
         log(f"从 {human(have)} 处续传")
