@@ -1,0 +1,85 @@
+{
+  "_comment": "复制这个文件为 config.json 并改成你自己的路径。勾掉的项表示可选。",
+
+  "host": "127.0.0.1",
+  "port": 8090,
+
+  "_llama_dir": "llama-server 的 .bat 和 .gguf 模型所在目录。下面的 bat/model/mmproj 若写相对路径会以此为准。",
+  "llama_dir": "C:\\models\\llama",
+
+  "_models": "对话模型列表，顺序就是侧栏顺序。id 是内部标识，port 要和 .bat 里的一致。",
+  "models": [
+    {
+      "id": "9b",
+      "label": "Qwen 9B 快速",
+      "short": "9B",
+      "blurb": "默认模型，反应最快",
+      "color": "#8ce99a",
+      "port": 8082,
+      "bat": "start-llama-server-9b.bat",
+      "model": "your-model-9b.gguf",
+      "mmproj": "",
+      "ctx": 40960,
+      "args": ["-c", "40960", "-ngl", "99"],
+      "about": "9B 稠密模型，40K 上下文，首字延迟最低，日常默认用它。"
+    },
+    {
+      "id": "35b",
+      "label": "Qwen 35B 深度",
+      "short": "35B",
+      "blurb": "MoE 35B，会看图，质量优先",
+      "color": "#7cc4ff",
+      "port": 8081,
+      "bat": "start-llama-server.bat",
+      "model": "your-model-35b.gguf",
+      "mmproj": "your-mmproj-35b.gguf",
+      "ctx": 65536,
+      "args": ["-c", "65536", "-ngl", "99", "-ncmoe", "24"],
+      "about": "MoE 结构，体积大但每 token 只激活部分专家，速度接近小模型，知识面更广。"
+    }
+  ],
+
+  "default_model": "9b",
+
+  "sd": {
+    "enabled": true,
+    "label": "SD 绘图",
+    "_dir": "Stable Diffusion WebUI 的安装目录（AUTOMATIC1111 或秋葉整合包）。留空则禁用绘图。",
+    "dir": "C:\\AI\\sd-webui",
+    "_python": "可选。留空会自动找 <dir>\\python\\python.exe。要用系统 Python 就写绝对路径。",
+    "python": "",
+    "port": 7860,
+    "args": ["launch.py", "--api", "--no-hashing", "--skip-python-version-check"],
+    "_style_guard": "附加到每条提示词末尾，用来稳住画风。不想要就设成空字符串。",
+    "style_guard": "detailed skin texture, natural lighting, film grain, sharp focus",
+    "_checkpoints": "可选。给 checkpoint 起好记的显示名和说明；键名是文件名前缀。",
+    "checkpoints": {}
+  },
+
+  "tts": {
+    "enabled": true,
+    "label": "语音合成",
+    "_dir": "IndexTTS2 的安装目录。留空则禁用语音功能。",
+    "dir": "C:\\AI\\index-tts",
+    "_python": "可选。留空会自动找 <dir>\\.venv\\Scripts\\python.exe。",
+    "python": "",
+    "_port": "注意：IndexTTS 默认 7860，和 SD 冲突，这里换成 7862。",
+    "port": 7862,
+    "args": ["--port", "7862", "--host", "127.0.0.1"],
+    "_ref_dir": "可选。自带参考音色的目录，默认 <dir>\\examples。",
+    "ref_dir": "",
+    "_default_voice": "默认音色文件名。把你自己的 wav 放进 data\\voices\\ 再填文件名。",
+    "default_voice": "",
+    "_allow_bundled": "允许出现在下拉里的自带音色。留空表示一个都不显示。",
+    "allow_bundled": [],
+    "hide": []
+  },
+
+  "translator": {
+    "enabled": true,
+    "_port": "本地翻译服务端口，只监听 127.0.0.1。",
+    "port": 8091,
+    "_model_dir": "可选。opus-mt-zh-en 的本地目录；留空则首次运行时从 Hugging Face 下载。",
+    "model_dir": ""
+  }
+}

@@ -1,0 +1,34 @@
+# ---- local configuration (machine specific) --------------------------------
+# Copy config.example.json to config.json and edit it. Never commit the real one:
+# it holds absolute paths and possibly a personal voice reference name.
+config.json
+
+# ---- personal data ---------------------------------------------------------
+# Chat history, generated pictures, synthesised speech, exported HTML.
+data/chats.json
+data/images/
+data/speech/
+data/window.json
+exports/
+outputs/
+
+# Reference voices are personal recordings. Keep yours out of the repo; the app
+# creates the folder on first run, and any wav you drop in shows up in the panel.
+data/voices/
+
+# Browser profile for the Edge app window (hundreds of MB).
+data/edge-profile/
+
+# ---- runtime output --------------------------------------------------------
+logs/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- OS / editor noise -----------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

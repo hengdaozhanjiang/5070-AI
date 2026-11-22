@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>SD 绘图</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#e6edf3;font:14px/1.55 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 18px 60px}
+h1{font-size:19px;margin:0 0 2px}
+.sub{color:#8b949e;font-size:12.5px;margin:0 0 18px}
+.grid{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.panel{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px}
+label{display:block;font-size:12px;color:#8b949e;margin:12px 0 5px}
+textarea,select,input[type="number"]{width:100%;background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:8px;padding:8px 10px;font:13px/1.5 inherit}
+textarea{resize:vertical;min-height:68px}
+textarea.neg{min-height:46px}
+select{cursor:pointer}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ck-list{display:grid;gap:8px;margin-top:4px}
+.ck{display:flex;align-items:center;gap:10px;border:1px solid #30363d;border-radius:9px;padding:7px 9px;cursor:pointer;background:#0d1117;transition:.15s}
+.ck:hover{border-color:#58a6ff}
+.ck.active{border-color:#58a6ff;background:rgba(88,166,255,.10)}
+.ck .txt{flex:1;min-width:0}
+.ck .nm{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ck .note{font-size:10.5px;color:#8b949e;line-height:1.4;margin:2px 0 1px;white-space:normal}
+.ck .st{font-size:11px;color:#8b949e}
+.ck .pill{font-size:10.5px;padding:1px 7px;border-radius:99px;background:#30363d;color:#e6edf3;white-space:nowrap}
+.ck.active .pill{background:#58a6ff;color:#0d1117}
+button.go{width:100%;margin-top:16px;padding:11px;border:0;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;background:#238636;color:#fff}
+button.go:hover{background:#2ea043}
+button.go:disabled{background:#21262d;color:#8b949e;cursor:default}
+button.mini{padding:5px 10px;border:1px solid #30363d;border-radius:7px;background:#21262d;color:#e6edf3;font-size:12px;cursor:pointer}
+button.mini:hover{border-color:#58a6ff}
+.hint{color:#8b949e;font-size:12px;margin-top:8px}
+.pics{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:4px}
+.pic{border:1px solid #30363d;border-radius:10px;overflow:hidden;background:#0d1117}
+.pic img{width:100%;display:block;cursor:zoom-in}
+.pic .cap{padding:6px 9px;font-size:11px;color:#8b949e;display:flex;gap:8px;align-items:center}
+.bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.bar .grow{flex:1}
+.chip{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid #30363d;color:#8b949e}
+.chip.ok{color:#3fb950;border-color:rgba(63,185,80,.45)}
+.chip.busy{color:#d29922;border-color:rgba(210,153,34,.5)}
+.slider{width:100%;margin-top:4px}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;place-items:center;z-index:9}
+.overlay.on{display:grid}
+.overlay img{max-width:92vw;max-height:92vh;border-radius:10px}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="bar" style="margin-bottom:12px">
+    <h1>SD 绘图</h1>
+    <span class="grow"></span>
+    <a href="/" style="font-size:12px;color:#58a6ff;text-decoration:none">← 返回聊天</a>
+  </div>
+  <p class="sub">Stable Diffusion WebUI（本地）· 点模型卡片即可切换（加载要 20-60 秒），写提示词后出图，图片可点开看大图</p>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="bar">
+        <span class="chip" id="status">连接中…</span>
+        <span class="grow"></span>
+        <button class="mini" id="refresh">刷新</button>
+      </div>
+
+      <label>模型</label>
+      <div class="ck-list" id="cklist"></div>
+
+      <label for="prompt">提示词</label>
+      <textarea id="prompt" placeholder="a quiet lakeside at dawn, mist, mountains"></textarea>
+
+      <label for="neg">反向提示词</label>
+      <textarea id="neg" class="neg" placeholder="lowres, bad anatomy, text, watermark, blurry"></textarea>
+
+      <div class="row">
+        <div>
+          <label for="size">尺寸</label>
+          <select id="size">
+            <option value="512x512">512×512</option>
+            <option value="640x640">640×640</option>
+            <option value="768x768" selected>768×768</option>
+            <option value="768x1024">768×1024</option>
+            <option value="576x768">576×768</option>
+            <option value="640x384">640×384</option>
+          </select>
+        </div>
+        <div>
+          <label for="steps">步数 <span id="stepsVal" class="chip">26</span></label>
+          <input type="range" class="slider" id="steps" min="8" max="50" value="26">
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="cfg">CFG <span id="cfgVal" class="chip">7</span></label>
+          <input type="range" class="slider" id="cfg" min="1" max="15" step="0.5" value="7">
+        </div>
+        <div>
+          <label for="seed">种子（-1 随机）</label>
+          <input type="number" id="seed" value="-1">
+        </div>
+      </div>
+
+      <button class="go" id="go">生成</button>
+      <p class="hint" id="msg">提示词写完点生成即可。</p>
+    </div>
+
+    <div class="panel">
+      <div class="bar">
+        <b style="font-size:13px">结果</b>
+        <span class="grow"></span>
+        <button class="mini" id="clear">清空</button>
+      </div>
+      <div class="pics" id="pics"></div>
+      <p class="hint" id="empty">还没有生成内容。</p>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="ov"><img id="ovimg"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const state = { checkpoints: [], model: '', generating: false };
+
+function setStatus(text, kind) {
+  const el = $('#status');
+  el.textContent = text;
+  el.className = 'chip' + (kind ? ' ' + kind : '');
+}
+
+function renderCkpts() {
+  const list = $('#cklist');
+  list.innerHTML = '';
+  if (!state.checkpoints.length) {
+    list.innerHTML = '<div class="hint">SD 未启动或未返回模型列表。</div>';
+    return;
+  }
+  state.checkpoints.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'ck' + (c.name === state.model ? ' active' : '');
+    const display = c.display || c.name.replace(/\.(safetensors|ckpt)$/i, '');
+    row.innerHTML = `
+      <div class="txt">
+        <div class="nm" title="${c.name}">${display}</div>
+        ${c.note ? `<div class="note">${c.note}</div>` : ''}
+        <div class="st">${c.name === state.model ? '当前使用中' : '点击切换'}</div>
+      </div>
+      <span class="pill">${c.name === state.model ? '使用中' : '切换'}</span>`;
+    row.onclick = () => selectCheckpoint(c.name);
+    list.appendChild(row);
+  });
+}
+
+let switching = false;
+
+async function selectCheckpoint(name) {
+  if (name === state.model || switching) return;
+  switching = true;
+  const short = name.replace(/\.(safetensors|ckpt)$/i, '').replace(/\s*\[[^\]]*\]$/, '');
+  setStatus(`切换中 → ${short}（加载模型要 20-60 秒，别关窗口）`, 'busy');
+  $('#msg').textContent = `正在加载 ${short}… 这段时间界面可能没反应，属于正常现象。`;
+  $('#go').disabled = true;
+  // show the target as selected immediately; refresh() must not overwrite it
+  state.model = name;
+  renderCkpts();
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/api/sd/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkpoint: name }),
+    }).then(x => x.json());
+    if (!r.ok) throw new Error(r.message || '切换失败');
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    setStatus(`已切换 · ${short}（${r.seconds != null ? r.seconds + 's' : secs + 's'}）`, 'ok');
+    $('#msg').textContent = '模型已切换，可以直接生成。';
+  } catch (e) {
+    setStatus('切换失败');
+    $('#msg').textContent = '切换失败：' + e.message;
+    // roll back to whatever is really loaded
+    await refresh();
+  } finally {
+    switching = false;
+    $('#go').disabled = false;
+  }
+}
+
+async function refresh() {
+  if (switching) return;          // never clobber the optimistic selection
+  try {
+    const r = await fetch('/api/state').then(x => x.json());
+    const sd = r.sd || {};
+    state.checkpoints = sd.checkpoints || [];
+    state.model = sd.model || '';
+    if (sd.up) setStatus('已连接 · ' + (state.model || '已就绪'), 'ok');
+    else setStatus(sd.loading ? 'SD 启动中…' : 'SD 未启动');
+    renderCkpts();
+  } catch (e) {
+    setStatus('无法连接 hub');
+  }
+}
+
+async function generate() {
+  const prompt = $('#prompt').value.trim();
+  if (!prompt) { $('#msg').textContent = '先写提示词。'; return; }
+  if (state.generating) return;
+
+  state.generating = true;
+  $('#go').disabled = true;
+  const [w, h] = $('#size').value.split('x').map(Number);
+  setStatus('生成中…', 'busy');
+  $('#msg').textContent = '正在生成，请稍候…';
+  try {
+    const r = await fetch('/api/sd/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        negative_prompt: $('#neg').value,
+        width: w, height: h,
+        steps: Number($('#steps').value),
+        cfg_scale: Number($('#cfg').value),
+        seed: Number($('#seed').value),
+        checkpoint: state.model || undefined,
+      }),
+    }).then(x => x.json());
+    if (!r.ok) throw new Error(r.message || '生成失败');
+    (r.images || []).forEach((src, i) => addPic(src, `${w}×${h} · seed ${r.seed ?? '?'}`, i));
+    $('#empty').style.display = 'none';
+    $('#msg').textContent = `完成：${(r.images || []).length} 张。`;
+    setStatus('完成', 'ok');
+  } catch (e) {
+    $('#msg').textContent = '失败：' + e.message;
+    setStatus('失败');
+  } finally {
+    state.generating = false;
+    $('#go').disabled = false;
+  }
+}
+
+function addPic(src, caption) {
+  const fig = document.createElement('figure');
+  fig.className = 'pic';
+  fig.innerHTML = `<img src="${src}"><div class="cap">${caption}</div>`;
+  $('img', fig).onclick = () => {
+    $('#ovimg').src = src;
+    $('#ov').classList.add('on');
+  };
+  $('#pics').prepend(fig);
+}
+
+$('#go').onclick = generate;
+$('#refresh').onclick = refresh;
+$('#clear').onclick = () => {
+  $('#pics').innerHTML = '';
+  $('#empty').style.display = 'block';
+};
+$('#ov').onclick = () => $('#ov').classList.remove('on');
+$('#steps').oninput = e => $('#stepsVal').textContent = e.target.value;
+$('#cfg').oninput = e => $('#cfgVal').textContent = e.target.value;
+
+refresh();
+setInterval(refresh, 8000);
+</script>
+</body></html>
