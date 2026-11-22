@@ -184,6 +184,26 @@ Hugging Face 直连慢的话，在配置里换成镜像：
 
 **注意**：不同机构发布的 GGUF 量化版本质量差异不小。同一个模型，Q4_K_M 和 Q6_K 在长文推理上的表现能差出可感知的距离。挑的时候看一下发布者的说明。
 
+**绘图、语音、翻译从哪来**
+
+这三样是**外部项目**，不在本仓库里，需要你自己装：
+
+| 组件 | 来源 | 说明 |
+|---|---|---|
+| Stable Diffusion WebUI | [AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) | 国内也可用秋葉整合包，自带 Python 和常用扩展 |
+| IndexTTS2 | [index-tts/index-tts](https://github.com/index-tts/index-tts) | Windows 整合包需带 venv 和 checkpoints |
+| 翻译模型 | [Helsinki-NLP/opus-mt-zh-en](https://huggingface.co/Helsinki-NLP/opus-mt-zh-en) | cc-by-4.0，312MB，纯 CPU 运行 |
+
+**SD 的 checkpoint** 从 [CivitAI](https://civitai.com) 下载（注意该站部分内容需登录）：
+
+| 模型 | 地址 | 大小 |
+|---|---|---|
+| majicMIX realistic v7 | [models/43331](https://civitai.com/models/43331) | 1.99 GB |
+| Realistic Vision V2.0 | [models/4201](https://civitai.com/models/4201) | 1.99 GB |
+| AbyssOrangeMix3 (AOM3A2) | [models/122537](https://civitai.com/models/122537) | 1.99 GB |
+
+下好放进 `<SD目录>\models\Stable-diffusion\` 即可，绘图面板会自动列出。
+
 **已验证可用的来源**
 
 开发时用的两个模型都能在 Hugging Face 找到（均为 Apache-2.0、非 gated）：
@@ -586,6 +606,31 @@ Chromium 会恢复它自己记的尺寸，命令行参数被忽略。必须在�
 
 **TTS 进度上报线程会泄漏**
 流读取抛异常时跳过了 `stop_tick.set()`，线程永远活着。改成 `try/finally` 保证一定能停。
+
+---
+
+## 发布到 GitHub
+
+仓库自带了 `publish.ps1`，会自动检查敏感文件、建仓并推送。
+
+**第一次需要登录一次**（之后凭据会被记住）：
+
+```powershell
+gh auth login
+# 选 GitHub.com -> HTTPS -> Login with a web browser
+```
+
+然后：
+
+```powershell
+.\publish.ps1                    # 仓库名默认 chengxin-huhua
+.\publish.ps1 -RepoName my-tool  # 自定义名字
+.\publish.ps1 -Private           # 建私有仓库
+```
+
+脚本会先复查 `git ls-files`，确认 `config.json`、录音、聊天记录、日志都没混进去，然后才推送。
+
+**关于代理**：本机访问 GitHub 需要走系统代理（`127.0.0.1:65532`）。脚本会自动读取注册表里的代理设置并传给 `gh`。如果你的环境不需要代理，删掉脚本里那段赋值即可。
 
 ---
 
