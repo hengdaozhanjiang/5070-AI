@@ -4,7 +4,7 @@
   "port": 8090,
   "_llama_dir": "llama-server 的 .bat 和 .gguf 模型所在目录。下面的 bat/model/mmproj 若写相对路径会以此为准。",
   "llama_dir": "C:\\models\\llama",
-  "_models": "对话模型列表，顺序就是侧栏顺序。id 是内部标识，port 要和 .bat 里的一致。",
+  "_models": "对话模型列表，顺序就是侧栏顺序。id 是内部标识，port 要和 .bat 里的一致。model / mmproj 是本地文件名，必须和 hf_file / mmproj_hf_file 对得上，否则下载完成后启动会用「模型文件不存在」。",
   "models": [
     {
       "id": "9b",
@@ -14,8 +14,8 @@
       "color": "#8ce99a",
       "port": 8082,
       "bat": "start-llama-server-9b.bat",
-      "model": "your-model-9b.gguf",
-      "mmproj": "",
+      "model": "Qwen3.5-9B-Ultra-Uncensored-Heretic-Q6_K.gguf",
+      "mmproj": "Qwen3.5-9B-mmproj-BF16.gguf",
       "ctx": 40960,
       "args": [
         "-c",
@@ -25,10 +25,10 @@
       ],
       "_download": "权重缺失时从哪里下载。两种写法二选一：直接给 url，或给 hf_repo + hf_file。留空则只能手动放文件。",
       "url": "",
-      "hf_repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
-      "hf_file": "qwen2.5-7b-instruct-q4_k_m.gguf",
-      "mmproj_hf_file": "",
-      "_note": "默认给的是中性模型做示例。想换成别的 GGUF，改 hf_repo + hf_file 即可。开发时作者用的是社区微调版，但那只是个人选择，不代表本项目推荐任何特定模型。",
+      "hf_repo": "llmfan46/Qwen3.5-9B-Ultra-Uncensored-Heretic-GGUF",
+      "hf_file": "Qwen3.5-9B-Ultra-Uncensored-Heretic-Q6_K.gguf",
+      "mmproj_hf_file": "Qwen3.5-9B-mmproj-BF16.gguf",
+      "_note": "开发时实际使用的模型（Apache-2.0，非 gated，7.4GB + 0.9GB）。这是社区制作的去除安全限制版本，请自行判断是否适合你的用途；想换中性模型就把 hf_repo / hf_file 改成 Qwen/Qwen2.5-7B-Instruct-GGUF 和 qwen2.5-7b-instruct-q4_k_m.gguf。",
       "about": "9B 稠密模型，40K 上下文，首字延迟最低，日常默认用它。"
     },
     {
@@ -39,8 +39,8 @@
       "color": "#7cc4ff",
       "port": 8081,
       "bat": "start-llama-server.bat",
-      "model": "your-model-35b.gguf",
-      "mmproj": "your-mmproj-35b.gguf",
+      "model": "Qwen3.5-35B-A3B-heretic-v2-Q4_K_M.gguf",
+      "mmproj": "Qwen3.5-35B-A3B-mmproj-BF16.gguf",
       "ctx": 65536,
       "args": [
         "-c",
@@ -51,10 +51,10 @@
         "24"
       ],
       "url": "",
-      "hf_repo": "Qwen/Qwen2.5-32B-Instruct-GGUF",
-      "hf_file": "qwen2.5-32b-instruct-q4_k_m.gguf",
-      "mmproj_hf_file": "",
-      "_note": "同上，换成你想用的任意 GGUF。",
+      "hf_repo": "JunLee88999/Qwen3.5-35B-A3B-heretic-v2-GGUF",
+      "hf_file": "Qwen3.5-35B-A3B-heretic-v2-Q4_K_M.gguf",
+      "mmproj_hf_file": "Qwen3.5-35B-A3B-mmproj-BF16.gguf",
+      "_note": "开发时实际使用的模型（Apache-2.0，非 gated，21GB + 0.9GB）。同样是社区去限制版本。中性替代：Qwen/Qwen2.5-32B-Instruct-GGUF + qwen2.5-32b-instruct-q4_k_m.gguf。",
       "about": "MoE 结构，体积大但每 token 只激活部分专家，速度接近小模型，知识面更广。"
     }
   ],

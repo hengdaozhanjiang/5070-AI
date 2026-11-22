@@ -159,8 +159,8 @@ python hub.py
 
 // 写法 B：Hugging Face 仓库 + 文件名
 {
-  "hf_repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
-  "hf_file": "qwen2.5-7b-instruct-q4_k_m.gguf"
+  "hf_repo": "<组织名>/<仓库名>",
+  "hf_file": "<仓库里的文件名>.gguf"
 }
 ```
 
@@ -212,36 +212,42 @@ Hugging Face 直连慢的话，在配置里换成镜像：
 
 下好放进 `<SD目录>\models\Stable-diffusion\` 即可，绘图面板会自动列出。
 
-**开发时用的来源（仅作示例）**
+**默认配置使用的来源**
 
-开发时用的两个模型都能在 Hugging Face 找到（均为 Apache-2.0、非 gated）：
+`config.example.json` 默认指向下面两个仓库（均为 Apache-2.0、非 gated，实测可下载）：
 
-| 模型 | 仓库 | 文件 |
-|---|---|---|
-| 9B Q6_K | `llmfan46/Qwen3.5-9B-Ultra-Uncensored-Heretic-GGUF` | `Qwen3.5-9B-Ultra-Uncensored-Heretic-Q6_K.gguf` (7.4GB) |
-| 9B mmproj | 同上 | `Qwen3.5-9B-mmproj-BF16.gguf` (0.9GB) |
-| 35B Q4_K_M | `JunLee88999/Qwen3.5-35B-A3B-heretic-v2-GGUF` | `Qwen3.5-35B-A3B-heretic-v2-Q4_K_M.gguf` (21GB) |
-| 35B mmproj | 同上 | `Qwen3.5-35B-A3B-mmproj-BF16.gguf` (0.9GB) |
+| 模型 | 仓库 | 文件 | 大小 |
+|---|---|---|---|
+| 9B Q6_K | `llmfan46/Qwen3.5-9B-Ultra-Uncensored-Heretic-GGUF` | `Qwen3.5-9B-Ultra-Uncensored-Heretic-Q6_K.gguf` | 7.4 GB |
+| 9B mmproj | 同上 | `Qwen3.5-9B-mmproj-BF16.gguf` | 0.9 GB |
+| 35B Q4_K_M | `JunLee88999/Qwen3.5-35B-A3B-heretic-v2-GGUF` | `Qwen3.5-35B-A3B-heretic-v2-Q4_K_M.gguf` | 21 GB |
+| 35B mmproj | 同上 | `Qwen3.5-35B-A3B-mmproj-BF16.gguf` | 0.9 GB |
 
-这两个是社区制作的**去除安全限制**版本，只是为了说明「开发时跑的是什么」而列出，**不代表本项目推荐**。
+> ⚠️ 这两个是社区制作的**去除安全限制**版本。这里提供的是下载便利，不代表质量或适用性上的背书——用在什么场景、要不要用，请你自己判断。
 
-**更稳妥的默认选择**是官方发布的指令微调版，把它们填进 `config.json` 就能用：
+**换成官方版本**
+
+想用更保守的模型，把 `config.json` 里对应的三项一起改掉即可（`model` 必须和 `hf_file` 一致，否则下载完了启动会提示「模型文件不存在」）：
 
 ```jsonc
-// 9B 档：Qwen2.5-7B-Instruct（约 4.7GB，Q4_K_M）
+// 9B 档：Qwen2.5-7B-Instruct（约 4.7GB）
 {
   "hf_repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
-  "hf_file": "qwen2.5-7b-instruct-q4_k_m.gguf"
+  "hf_file": "qwen2.5-7b-instruct-q4_k_m.gguf",
+  "model": "qwen2.5-7b-instruct-q4_k_m.gguf",
+  "mmproj": "",
+  "mmproj_hf_file": ""
 }
 
-// 35B 档：Qwen2.5-32B-Instruct（约 20GB，Q4_K_M）
+// 35B 档：Qwen2.5-32B-Instruct（约 20GB）
 {
   "hf_repo": "Qwen/Qwen2.5-32B-Instruct-GGUF",
-  "hf_file": "qwen2.5-32b-instruct-q4_k_m.gguf"
+  "hf_file": "qwen2.5-32b-instruct-q4_k_m.gguf",
+  "model": "qwen2.5-32b-instruct-q4_k_m.gguf",
+  "mmproj": "",
+  "mmproj_hf_file": ""
 }
 ```
-
-`config.example.json` 的默认值用的就是这一组；上面那两个社区版放在注释里，需要时再换。
 
 实测下载 879MB 的 mmproj 用 74 秒（约 12 MB/s），下载后直接启动正常。
 
