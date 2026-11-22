@@ -40,6 +40,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
+import download
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 UI_DIR = os.path.join(HERE, "ui")
@@ -89,6 +90,12 @@ def _build_models() -> dict:
             "log": os.path.join(LOG_DIR, f"server-{mid}.log"),
             "shortcut": raw.get("shortcut") or "",
             "about": raw.get("about") or "",
+            # where to fetch the weights from when they are missing
+            "url": raw.get("url") or "",
+            "hf_repo": raw.get("hf_repo") or "",
+            "hf_file": raw.get("hf_file") or "",
+            "mmproj_url": raw.get("mmproj_url") or "",
+            "mmproj_hf_file": raw.get("mmproj_hf_file") or "",
         }
     return out
 
@@ -227,6 +234,10 @@ def probe(cfg: dict, fresh: bool = False) -> dict:
         "up": False, "loading": False, "error": None,
         "model": None, "slots": None, "tokens": None,
         "n_ctx": cfg["ctx"],      # real value once /props answers
+        # what still has to be downloaded before this model can start
+        "missing": [p for _f, p in download.missing(cfg)],
+        "downloadable": bool(cfg.get("url") or
+                             (cfg.get("hf_repo") and cfg.get("hf_file"))),
     }
     if not port_open(port):
         state["loading"] = spawn_in_progress(mid)
@@ -827,6 +838,76 @@ def tts_speak(payload: dict) -> dict:
     return out
 
 
+def model_download(mid: str) -> dict:
+    """Fetch a model's missing weight files in the background.
+
+    The transfer runs on a worker thread so the HTTP request returns at once and
+    the UI can watch /api/progress. Only one download runs at a time: the files
+    are huge and the disk is the bottleneck.
+    """
+    cfg = MODELS.get(mid)
+    if not cfg:
+        return {"ok": False, "message": "未知模型"}
+    if job_snapshot("download").get("state") == "running":
+        return {"ok": False, "message": "已有下载在进行，等它结束再试"}
+
+    todo = download.missing(cfg)
+    if not todo:
+        return {"ok": True, "message": "文件都在，不需要下载"}
+
+    dl = CFG.get("download") or {}
+    endpoint = dl.get("hf_endpoint") or "https://huggingface.co"
+
+    # build the work list first, so a missing URL fails before the thread starts
+    plan = []
+    for field, path in todo:
+        # the same model entry carries one URL; mmproj falls back to a sibling
+        spec = dict(cfg)
+        if field == "mmproj":
+            spec["url"] = cfg.get("mmproj_url") or ""
+            spec["hf_file"] = cfg.get("mmproj_hf_file") or ""
+        url = download.resolve_url(spec, endpoint)
+        if not url:
+            return {"ok": False,
+                    "message": f"{os.path.basename(path)} 没有配置下载地址"
+                               f"（给它加 url 或 hf_repo + hf_file）"}
+        plan.append((path, url))
+
+    job_set("download", state="running", progress=0.0,
+            label=os.path.basename(plan[0][0]), started=time.time(),
+            result=None, error=None, done_bytes=0, total_bytes=0, speed=0.0)
+
+    def worker() -> None:
+        total_done = 0
+        for index, (path, url) in enumerate(plan):
+            name = os.path.basename(path)
+            job_set("download", label=f"{name}（{index + 1}/{len(plan)}）")
+
+            def progress(done: int, total: int, speed: float,
+                         _i=index) -> None:
+                # progress across the whole plan, so multiple files still add up
+                frac = (done / total) if total else 0.0
+                overall = (_i + frac) / len(plan)
+                job_set("download", progress=min(0.999, overall),
+                        done_bytes=done, total_bytes=total, speed=speed,
+                        label=f"{name}  {download.human(done)}"
+                              f"{' / ' + download.human(total) if total else ''}"
+                              f"  {download.human(speed)}/s")
+
+            result = download.download(url, path, on_progress=progress)
+            if not result.get("ok"):
+                job_finish("download", error=result.get("message"))
+                return
+            total_done += result.get("bytes") or 0
+
+        job_finish("download", result={"ok": True, "bytes": total_done,
+                                       "count": len(plan)})
+
+    threading.Thread(target=worker, daemon=True).start()
+    names = "、".join(os.path.basename(p) for p, _u in plan)
+    return {"ok": True, "message": f"开始下载 {names}（可关掉窗口，下载会继续）"}
+
+
 def sd_start() -> dict:
     r"""Start the SD WebUI with --api, unloading the language models first.
 
@@ -1252,6 +1333,10 @@ JOBS: dict[str, dict] = {
             "result": None, "error": None},
     "sd": {"state": "idle", "progress": 0.0, "label": "", "started": 0.0,
            "result": None, "error": None},
+    # model downloads reuse the same shape so one progress bar works for all
+    "download": {"state": "idle", "progress": 0.0, "label": "", "started": 0.0,
+                 "result": None, "error": None,
+                 "done_bytes": 0, "total_bytes": 0, "speed": 0.0},
 }
 _jobs_lock = threading.Lock()
 
@@ -1495,7 +1580,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/tts/log":
             self._serve_file_log(TTS["log"], label="tts")
         elif path == "/api/progress":
-            self._json({"sd": job_snapshot("sd"), "tts": job_snapshot("tts")})
+            self._json({"sd": job_snapshot("sd"), "tts": job_snapshot("tts"),
+                        "download": job_snapshot("download")})
         elif path == "/api/chats":
             self._json(read_chats())
         elif path.startswith("/audio/"):
@@ -1525,6 +1611,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             merged = merge_chats(data)
             self._json({"ok": True, "revision": len(merged["chats"])})
+        elif path == "/api/download":
+            try:
+                payload = json.loads(body or b"{}")
+            except Exception:  # noqa: BLE001
+                self._json({"ok": False, "message": "bad payload"}, 400)
+                return
+            mid = str((payload or {}).get("model") or "")
+            self._json(model_download(mid))
         elif path == "/api/tts/start":
             with _spawn_lock:
                 self._json(tts_start())

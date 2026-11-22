@@ -21,6 +21,13 @@
       "mmproj": "",
       "ctx": 40960,
       "args": ["-c", "40960", "-ngl", "99"],
+
+      "_download": "权重缺失时从哪里下载。两种写法二选一：直接给 url，或给 hf_repo + hf_file。留空则只能手动放文件。",
+      "url": "",
+      "hf_repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
+      "hf_file": "qwen2.5-7b-instruct-q4_k_m.gguf",
+      "mmproj_hf_file": "",
+
       "about": "9B 稠密模型，40K 上下文，首字延迟最低，日常默认用它。"
     },
     {
@@ -35,6 +42,12 @@
       "mmproj": "your-mmproj-35b.gguf",
       "ctx": 65536,
       "args": ["-c", "65536", "-ngl", "99", "-ncmoe", "24"],
+
+      "url": "",
+      "hf_repo": "",
+      "hf_file": "",
+      "mmproj_hf_file": "",
+
       "about": "MoE 结构，体积大但每 token 只激活部分专家，速度接近小模型，知识面更广。"
     }
   ],
@@ -73,6 +86,11 @@
     "_allow_bundled": "允许出现在下拉里的自带音色。留空表示一个都不显示。",
     "allow_bundled": [],
     "hide": []
+  },
+
+  "download": {
+    "_hf_endpoint": "国内访问慢就改成 https://hf-mirror.com",
+    "hf_endpoint": "https://huggingface.co"
   },
 
   "translator": {

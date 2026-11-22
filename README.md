@@ -28,6 +28,7 @@
 
 - [安装](#安装)
 - [配置](#配置)
+- [获取模型](#获取模型)
 - [快速开始](#快速开始)
 - [四个服务](#四个服务)
 - [界面导览](#界面导览)
@@ -133,6 +134,55 @@ python hub.py
 ```
 
 前端会根据 `models` 自动渲染卡片，不需要改代码。
+
+---
+
+## 获取模型
+
+权重动辄几个到二十几个 GB，**不会放进仓库**。但仓库会记住每个模型从哪来，所以不用你自己去翻下载页。
+
+**给模型配置来源**
+
+在 `config.json` 的模型条目里二选一：
+
+```jsonc
+// 写法 A：直接给链接
+{ "url": "https://example.com/model.gguf" }
+
+// 写法 B：Hugging Face 仓库 + 文件名
+{
+  "hf_repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
+  "hf_file": "qwen2.5-7b-instruct-q4_k_m.gguf"
+}
+```
+
+视觉投影层（mmproj / 多模态）用 `mmproj_url` 或 `mmproj_hf_file`，写法相同。
+
+**三种下载方式**
+
+| 方式 | 怎么做 |
+|---|---|
+| 界面内 | 模型卡片会显示「缺 N 个模型文件」，点「下载」，卡片上有进度条 |
+| 命令行 | `python get-models.py`（全部）或 `python get-models.py 9b`（单个） |
+| 手动 | 自己下好放进 `llama_dir`，文件名和配置里的对上即可 |
+
+`python get-models.py --list` 只查看状态不下载，很适合检查还差什么。
+
+**断点续传**
+
+下载先写到 `文件名.part`，中断后重跑会从断点继续，不会从零开始。二十几个 GB 的文件这点很关键。
+
+**国内网络**
+
+Hugging Face 直连慢的话，在配置里换成镜像：
+
+```jsonc
+"download": {
+  "hf_endpoint": "https://hf-mirror.com"
+}
+```
+
+**注意**：不同机构发布的 GGUF 量化版本质量差异不小。同一个模型，Q4_K_M 和 Q6_K 在长文推理上的表现能差出可感知的距离。挑的时候看一下发布者的说明。
 
 ---
 
@@ -361,6 +411,8 @@ chengxin-huhua\
 ├─ hub.py              主程序（后端 + 静态服务 + 反向代理）
 ├─ config.py           配置加载（config.json + 环境变量覆盖）
 ├─ config.example.json 配置模板，复制成 config.json 再改
+├─ download.py         模型下载器（断点续传 + 进度）
+├─ get-models.py       命令行批量下载
 ├─ translator.py       中英翻译服务（opus-mt-zh-en，CPU）
 ├─ tts_launch.py       IndexTTS 启动包装（绕开 DLL 冲突）
 ├─ app.ico             主图标（橙子）
@@ -422,7 +474,8 @@ hub 在 `127.0.0.1:8090` 上提供这些接口：
 | GET | `/api/state` | 全部服务状态（模型、SD、TTS、音色列表） |
 | POST | `/api/start` | 启动聊天模型 `{model, replace}` |
 | POST | `/api/stop` | 停止聊天模型 `{model}` |
-| GET | `/api/progress` | 两个长任务的进度 |
+| POST | `/api/download` | 下载缺失的模型权重 `{model}` |
+| GET | `/api/progress` | 长任务的进度（sd / tts / download） |
 | POST | `/api/sd/start` `/stop` | 启动/停止 SD |
 | POST | `/api/sd/select` | 切换 checkpoint `{name}` |
 | POST | `/api/sd/generate` | 出图 `{prompt, negative, width, height, steps, cfg, seed}` |

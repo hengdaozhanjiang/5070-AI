@@ -34,6 +34,10 @@ DEFAULTS = {
             "mmproj": "",
             "ctx": 40960,
             "args": ["-c", "40960", "-ngl", "99"],
+            # where to fetch the weights from if they are missing (see get-models)
+            "url": "",
+            "hf_repo": "",
+            "hf_file": "",
             "about": "9B 稠密模型，40K 上下文，首字延迟最低，日常默认用它。",
         },
         {
@@ -48,6 +52,9 @@ DEFAULTS = {
             "mmproj": "",
             "ctx": 65536,
             "args": ["-c", "65536", "-ngl", "99", "-ncmoe", "24"],
+            "url": "",
+            "hf_repo": "",
+            "hf_file": "",
             "about": "MoE 结构，体积大但每 token 只激活部分专家，速度接近小模型，"
                      "知识面更广，支持图片输入。",
         },
@@ -78,6 +85,13 @@ DEFAULTS = {
         "default_voice": "",
         "allow_bundled": [],
         "hide": [],
+    },
+    # base endpoints used by the model downloader
+    "download": {
+        # Hugging Face endpoint; set this to https://hf-mirror.com in mainland China
+        "hf_endpoint": "https://huggingface.co",
+        # how many parallel connections for a single file (0 = let the server decide)
+        "connections": 4,
     },
     # local CPU translator used to turn Chinese prompts into English
     "translator": {

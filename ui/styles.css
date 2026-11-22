@@ -143,6 +143,9 @@ button { cursor: pointer; border: 0; background: none; }
   background: var(--line);
   overflow: hidden;
 }
+/* inside a model card the bar has to be tighter */
+.dl-progress .pbar { height: 4px; margin: 6px 0 2px; }
+.dl-progress .pbar-foot { font-size: 10.5px; }
 .pbar i {
   display: block;
   height: 100%;

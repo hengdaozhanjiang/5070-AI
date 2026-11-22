@@ -188,6 +188,33 @@ function applyTheme() {
   document.documentElement.dataset.theme = state.theme;
 }
 
+/* Download a model's missing weights, with live progress in its card. */
+async function startDownload(id, host) {
+  const m = modelOf(id);
+  toast(`开始下载 ${m.label} 的模型文件…`);
+  const r = await fetch('/api/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: id }),
+  }).then(x => x.json()).catch(e => ({ ok: false, message: String(e) }));
+  if (!r.ok) {
+    toast(r.message || '下载启动失败', 'err');
+    return;
+  }
+  toast(r.message || '下载已开始', 'ok');
+  // the field is rebuilt on the next poll, so hand it to trackJob explicitly
+  const stop = trackJob('download', host, '下载中', job => {
+    if (job.state === 'done') {
+      toast('模型下载完成', 'ok');
+      pollState(true);
+    } else if (job.state === 'error') {
+      toast('下载失败：' + (job.error || '未知原因'), 'err');
+    }
+  });
+  // stop watching if the card disappears
+  setTimeout(() => { if (!document.body.contains(host)) stop(); }, 1000);
+}
+
 function renderModelList() {
   const box = $('#model-list');
   box.innerHTML = '';
@@ -204,7 +231,9 @@ function renderModelList() {
     el.setAttribute('aria-pressed', String(m.id === active));
 
     const dot = m.up ? 'up' : (m.loading ? 'loading' : 'down');
-    const statusText = m.up ? `运行中 · :${m.port}` : (m.loading ? '加载中…' : '未启动');
+    const lacks = (m.missing || []).length > 0;
+    const statusText = m.up ? `运行中 · :${m.port}`
+      : (m.loading ? '加载中…' : (lacks ? `缺 ${m.missing.length} 个模型文件` : '未启动'));
     el.innerHTML = `
       <div class="glyph">${escapeHtml(m.short)}</div>
       <div class="info">
@@ -212,13 +241,16 @@ function renderModelList() {
         <div class="desc">${escapeHtml(m.blurb)}</div>
         <div class="meter ${m.loading ? 'on' : ''}"><i></i></div>
         <div class="desc" style="opacity:.75;margin-top:4px">${escapeHtml(statusText)}</div>
+        <div class="dl-progress"></div>
       </div>
       <div class="actions">
-        ${m.up
-          ? `<button data-act="stop" class="danger" title="停止，释放显存">停止</button>
-             <button data-act="log" title="查看日志">日志</button>`
-          : `<button data-act="start" title="启动该模型">启动</button>
-             <button data-act="log" title="查看日志">日志</button>`}
+        ${lacks && m.downloadable
+          ? '<button data-act="download" title="下载缺失的模型文件">下载</button>'
+          : (m.up
+              ? `<button data-act="stop" class="danger" title="停止，释放显存">停止</button>
+                 <button data-act="log" title="查看日志">日志</button>`
+              : `<button data-act="start" title="启动该模型">启动</button>
+                 <button data-act="log" title="查看日志">日志</button>`)}
         <button data-act="info" title="模型信息">详情</button>
       </div>`;
 
@@ -231,6 +263,7 @@ function renderModelList() {
         else if (kind === 'stop') stopModel(m.id);
         else if (kind === 'log') openLog(m.id);
         else if (kind === 'info') openInfo(m.id);
+        else if (kind === 'download') startDownload(m.id, $('.dl-progress', el));
         return;
       }
       selectModel(m.id);
