@@ -53,6 +53,9 @@ function loadSettings() {
     drawCfg: 7,
     drawSeed: -1,
     ttsVoice: '',           // reference voice for speech synthesis
+    ttsEngine: 'browser',   // "browser" (Web Speech, instant) or "local" (IndexTTS)
+    browserVoice: '',       // chosen system voice name
+    browserRate: 1,         // 0.5 - 2
     ttsText: '',            // draft text in the TTS panel
     ttsSavedAt: 0,          // when the preset was last saved by hand
   };
@@ -1995,14 +1998,36 @@ function openTts(prefill) {
   $('#tts-modal').classList.add('open');
 }
 
-/* Speak some text and drop an audio player into the chat. */
+/* Read a reply out loud.
+ *
+ * Two engines, picked by settings.ttsEngine:
+ *   "browser" - Web Speech API, instant, no VRAM, no service to start
+ *   "local"   - IndexTTS2, cloned voice, needs the GPU service running
+ * Browser is the default because reading a sentence should never force you to
+ * unload the chat model you are talking to. */
 async function speakText(text, el) {
   const body = (text || '').trim();
   if (!body) return;
+
+  const engine = state.settings.ttsEngine || 'browser';
+  const canBrowser = window.BrowserTTS && window.BrowserTTS.available;
+
+  if (engine === 'browser' && canBrowser) {
+    speakWithBrowser(body, el);
+    return;
+  }
+
   if (!ttsReady()) {
+    // no local service: fall back to the browser rather than failing outright
+    if (canBrowser) {
+      toast('语音服务没启动，改用浏览器朗读');
+      speakWithBrowser(body, el);
+      return;
+    }
     toast('语音合成没有在运行，先点侧栏“语音”卡片上的启动', 'err');
     return;
   }
+
   if (el) {
     el.disabled = true;
     el.textContent = '合成中…';
@@ -2028,6 +2053,26 @@ async function speakText(text, el) {
       el.textContent = '朗读';
     }
   }
+}
+
+/* Speak immediately in the page, with a 停止 toggle on the button. */
+function speakWithBrowser(text, el) {
+  const BT = window.BrowserTTS;
+  if (BT.speaking) {
+    BT.stop();
+    if (el) el.textContent = '朗读';
+    return;
+  }
+  if (el) {
+    el.disabled = false;
+    el.textContent = '停止';
+  }
+  BT.speak(text, {
+    voice: state.settings.browserVoice || '',
+    rate: Number(state.settings.browserRate) || 1,
+  }, () => {
+    if (el) el.textContent = '朗读';
+  });
 }
 
 /* Put an audio player into the conversation so it is kept with the chat. */
@@ -2766,7 +2811,44 @@ function openSettings() {
   $('#topp-val').textContent = Number(state.settings.topP).toFixed(2);
   $('#set-reasoning').checked = !!state.settings.reasoning;
   $('#set-system').value = state.settings.system || '';
+  fillBrowserVoices();
   $('#settings-modal').classList.add('open');
+}
+
+/* Populate the system-voice picker from whatever the browser exposes. */
+function fillBrowserVoices() {
+  const sel = $('#set-browser-voice');
+  if (!sel) return;
+  const BT = window.BrowserTTS;
+  const voices = BT ? BT.list() : [];
+  const cur = state.settings.browserVoice || '';
+  if (!voices.length) {
+    sel.innerHTML = '<option value="">（系统没有可用的语音包）</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  // Prefer Simplified Chinese (zh-CN) over Traditional (zh-TW/HK), and the
+  // "Natural" neural voices over the old robotic ones.
+  const score = v => {
+    let s = 0;
+    if (/^zh[-_]?(CN|Hans|SG)/i.test(v.lang)) s += 100;
+    else if (/^zh/i.test(v.lang)) s += 40;
+    if (/natural/i.test(v.name)) s += 30;
+    if (v.local) s += 5;
+    return s;
+  };
+  const sorted = [...voices].sort((a, b) => score(b) - score(a)
+    || a.name.localeCompare(b.name));
+  sel.innerHTML = sorted.map(v =>
+    `<option value="${escapeHtml(v.name)}"${v.name === cur ? ' selected' : ''}>`
+    + `${escapeHtml(v.name)} · ${escapeHtml(v.lang)}${v.local ? '' : ' (在线)'}</option>`).join('');
+  // only auto-pick when the user has not chosen one yet
+  if (!cur && sorted[0]) {
+    state.settings.browserVoice = sorted[0].name;
+    saveSettings();
+    sel.value = sorted[0].name;
+  }
 }
 
 function bindSettings() {
@@ -2780,12 +2862,25 @@ function bindSettings() {
     state.settings.topP = parseFloat($('#set-topp').value);
     state.settings.reasoning = $('#set-reasoning').checked;
     state.settings.system = $('#set-system').value;
+    const eng = $('#set-tts-engine');
+    if (eng) state.settings.ttsEngine = eng.value;
+    const bv = $('#set-browser-voice');
+    if (bv && bv.value) state.settings.browserVoice = bv.value;
+    const br = $('#set-browser-rate');
+    if (br) state.settings.browserRate = parseFloat(br.value) || 1;
     saveSettings();
     renderContinueChip();
   };
   ['#set-autoroute', '#set-routeask', '#set-autocontinue', '#set-rounds', '#set-maxtokens',
-   '#set-temp', '#set-topp', '#set-reasoning', '#set-system']
-    .forEach(sel => $(sel).addEventListener('input', read));
+   '#set-temp', '#set-topp', '#set-reasoning', '#set-system',
+   '#set-tts-engine', '#set-browser-voice', '#set-browser-rate']
+    .forEach(sel => {
+      const el = $(sel);
+      if (el) el.addEventListener('input', read);
+    });
+  $('#set-browser-rate').addEventListener('input', () => {
+    $('#rate-val').textContent = (parseFloat($('#set-browser-rate').value) || 1).toFixed(1) + '×';
+  });
   $('#set-temp').addEventListener('input', () => {
     $('#temp-val').textContent = Number($('#set-temp').value).toFixed(2);
   });
