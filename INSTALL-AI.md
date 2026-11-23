@@ -220,6 +220,65 @@ copy config.example.json config.json
 | 模型文件名 | `config.json` 的 `model` | 磁盘上真实文件名 |
 | 模型文件名 | `config.json` 的 `model` | `hf_file`（如果配了下载） |
 
+### 第 4.1 步：可选服务（SD 绘图 / Qwen 图像 / 语音）
+
+这些不是必须的，用户只想要对话就跳过整步。
+
+**SD 绘图**（SD1.5 / SDXL）
+
+```jsonc
+"sd": {
+  "enabled": true,
+  "dir": "D:\\AI\\sd-webui-aki-v4.2",
+  "port": 7860,
+  "python": "D:\\AI\\sd-webui-aki-v4.2\\python\\python.exe"
+}
+```
+
+模型放在 `<sd_dir>\\models\\Stable-diffusion\\`。没有模型可以先下：
+
+```powershell
+python get-sd-model.py               # SDXL base，约 6.9GB
+python get-sd-model.py realvisxl     # RealVisXL V5.0 写实微调，约 6.5GB
+```
+
+> **新增模型后必须重启 SD**，它只在启动时扫描模型目录。
+
+**Qwen 图像**（需要 ComfyUI，SD WebUI 加载不了这个模型）
+
+这一步明显更重，只在用户明确想用 Qwen-Image 时才做：
+
+1. 下载 ComfyUI 便携版（`ComfyUI_windows_portable_nvidia.7z`，1.5GB）
+2. 解压需要真正的 7-Zip；`py7zr` 不行（不支持 BCJ2）
+3. 用**系统 Python 3.12**跑，不要用便携版自带的 3.11（可复现的坑）
+4. 装 torch：必须 **2.8 以上 + cu128**，否则没有 DynamicVRAM，出图慢 30 倍
+   ```powershell
+   pip install torch==2.11.0+cu128 torchvision==0.26.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+   ```
+5. 装 ComfyUI 依赖后**重装一次 cu128 的 torch**（requirements 里的裸 `torch` 会把它换成 CPU 版）
+6. 装 `ComfyUI-GGUF` 节点到 `custom_nodes/`
+7. 三个模型文件缺一不可：
+
+   | 放哪 | 文件 | 大小 |
+   |---|---|---|
+   | `models/unet/` | `qwen-image-2.1-turbo-Q4_K_M.gguf` | 3.9GB |
+   | `models/clip/text_encoders/` | `qwen3vl_8b_w4a8.safetensors` | 5.9GB |
+   | `models/vae/` | `qwen_image_2.1_vae_bf16.safetensors` | 0.6GB |
+
+8. 如果 `import torch` 报 `c10.dll` 初始化失败，是系统的 `MSVCP140.dll` 太旧
+   （14.00 需要 14.4+）。把 WinSxS 里的新版拷到 Python 目录即可，**不要改系统文件**。
+
+配置：
+
+```jsonc
+"comfy": { "enabled": true, "dir": "D:\\AI\\ComfyUI_windows_portable\\ComfyUI", "port": 8188 }
+```
+
+> Qwen-Image 的许可证是 **Qwen Research License，非商用**。SDXL 的微调多是
+> openrail++，可以商用。这个区别要跟用户讲清楚。
+
+**语音合成**（IndexTTS2）：见 `config.example.json` 的 `tts` 段。
+
 ### 第 5 步：下载模型（可选）
 
 如果用户没现成模型，用自带的下载器（支持断点续传）：
