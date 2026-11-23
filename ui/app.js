@@ -2032,7 +2032,11 @@ function openTts(prefill) {
  * Browser is the default because reading a sentence should never force you to
  * unload the chat model you are talking to. */
 async function speakText(text, el) {
-  const body = (text || '').trim();
+  // Messages are Markdown; reading the raw source makes the voice engine
+  // announce "asterisk asterisk" and "hash hash". Strip it first. The chat
+  // bubble keeps its formatting - this only affects what gets spoken.
+  const raw = (text || '').trim();
+  const body = (window.MarkdownSpeech ? window.MarkdownSpeech.strip(raw) : raw).trim();
   if (!body) return;
 
   const engine = state.settings.ttsEngine || 'browser';
