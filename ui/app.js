@@ -26,6 +26,8 @@ const state = {
   settings: loadSettings(),
   theme: localStorage.getItem(THEME_KEY) || 'dark',
   attached: [],         // [{ name, dataUrl, mime }]
+  comfy: null,          // Qwen-Image / ComfyUI status from /api/state
+  drawBackend: 'sd',    // which service the drawing panel currently drives
 };
 
 function loadSettings() {
@@ -369,6 +371,49 @@ function renderSdCard() {
     else if (kind === 'stop') stopSd();
     else if (kind === 'log') openSdLog();
     else if (kind === 'draw') openDraw();
+  });
+  box.appendChild(el);
+}
+
+/* Qwen-Image card in the sidebar. Same shape as the SD and TTS cards. */
+function renderComfyCard() {
+  const box = $('#comfy-card');
+  if (!box) return;
+  const c = state.comfy || {};
+  box.innerHTML = '';
+  const dot = c.up ? 'up' : (c.loading ? 'loading' : 'down');
+  let status;
+  if (c.up) {
+    const missing = (c.models || []).filter(m => !m.ok).length;
+    status = c.ready
+      ? `就绪 · Qwen-Image Turbo${c.vram_total ? ` · 显存 ${c.vram_free}/${c.vram_total}G` : ''}`
+      : `缺 ${missing} 个模型文件`;
+  } else {
+    status = c.loading ? '启动中…（首次 10-20 秒）' : '未启动';
+  }
+  const el = document.createElement('div');
+  el.className = 'sd';
+  el.innerHTML = `
+    <div class="glyph" style="background:linear-gradient(150deg,#c084fc,#6b21a8)">QI</div>
+    <div class="info">
+      <div class="name"><span class="dot ${dot}"></span>Qwen 图像</div>
+      <div class="desc">${escapeHtml(status)}</div>
+    </div>
+    <div class="actions">
+      ${c.up
+        ? `<button data-act="stop" class="danger">停止</button>`
+        : `<button data-act="start">启动</button>`}
+      <button data-act="log">日志</button>
+      <button data-act="draw"${c.ready ? '' : ' disabled'}>画一张</button>
+    </div>`;
+  el.addEventListener('click', ev => {
+    const act = ev.target.closest('[data-act]');
+    if (!act) return;
+    const kind = act.dataset.act;
+    if (kind === 'start') startComfy();
+    else if (kind === 'stop') stopComfy();
+    else if (kind === 'log') openComfyLog();
+    else if (kind === 'draw') openQwen();
   });
   box.appendChild(el);
 }
@@ -1831,6 +1876,7 @@ function renderAll() {
   renderModelList();
   renderSdCard();
   renderTtsCard();
+  renderComfyCard();
   renderServicesSummary();
   renderConvList();
   renderChips();
@@ -1847,6 +1893,7 @@ async function pollState(force = false) {
     state.models = data.models || [];
     state.sd = data.sd || null;
     state.tts = data.tts || null;
+    state.comfy = data.comfy || null;
     const sdNow = sdReady();
     const ttsNow = ttsReady();
     const hub = data.hub || {};
@@ -1865,6 +1912,7 @@ async function pollState(force = false) {
     renderModelList();
     renderSdCard();
     renderTtsCard();
+    renderComfyCard();
     renderServicesSummary();
     renderChips();
     // an empty conversation shows a different starter panel depending on which
@@ -1877,6 +1925,27 @@ async function pollState(force = false) {
     $('#hub-dot').classList.add('off');
     $('#hub-text').textContent = 'hub 断开';
   }
+}
+
+async function startComfy() {
+  toast('正在启动 Qwen 图像（会先卸载其他模型）…');
+  const r = await fetch('/api/comfy/start', { method: 'POST' })
+    .then(x => x.json()).catch(e => ({ ok: false, message: String(e) }));
+  toast(r.message || (r.ok ? '已启动' : '启动失败'));
+  await pollState(true);
+}
+
+async function stopComfy() {
+  const r = await fetch('/api/comfy/stop', { method: 'POST' })
+    .then(x => x.json()).catch(e => ({ ok: false, message: String(e) }));
+  toast(r.message || '已停止');
+  await pollState(true);
+}
+
+async function openComfyLog() {
+  const r = await fetch('/api/comfy/log');
+  const t = r.ok ? (await r.json()).text : '读不到日志';
+  showInfo('Qwen 图像日志', `<pre class="log-pre">${escapeHtml(t || '（空）')}</pre>`);
 }
 
 async function startModel(id, replace = false) {
@@ -2406,7 +2475,51 @@ function showDrawSavedAt() {
   el.textContent = `已保存 ${t}`;
 }
 
+/* The Qwen-Image panel reuses the drawing modal (same prompt, size and
+   button) but talks to ComfyUI instead of the SD WebUI. A flag on the state
+   decides which backend the generate button reaches. */
+function openQwen(prefill) {
+  state.drawBackend = 'comfy';
+  const title = $('#draw-title');
+  if (title) title.textContent = 'Qwen 图像';
+  const modal = $('#draw-modal');
+  if (!modal) return;
+  const c = state.comfy || {};
+  if (!c.up) {
+    toast('Qwen 图像没在运行，先点侧栏的“启动”', 'err');
+    return;
+  }
+  // Qwen-Image is native at 1024; leave the size controls showing that
+  applyFamilyDefaults({ family: 'sdxl', defaults: { width: 1024, height: 1024,
+                                                   steps: 8, cfg: 1 } });
+  const note = $('#draw-family-note');
+  if (note) note.textContent = 'Qwen-Image 2.1 Turbo · 原生 1024×1024，8 步，CFG 1';
+  if (prefill != null) $('#draw-prompt').value = prefill;
+  else restoreDrawDraft();
+  // controlnet is an SD concept; hide it while Qwen drives
+  const cn = $('#draw-cn-on');
+  if (cn) {
+    const block = cn.closest('.cn-block');
+    if (block) block.hidden = true;
+  }
+  const cp = $('#draw-checkpoints');
+  if (cp) cp.hidden = true;
+  $('#draw-status').textContent = '';
+  modal.classList.add('open');
+  setTimeout(() => $('#draw-prompt').focus(), 120);
+}
+
 function openDraw(prefill) {
+  state.drawBackend = 'sd';
+  const title = $('#draw-title');
+  if (title) title.textContent = 'SD 绘图';
+  const cn = $('#draw-cn-on');
+  if (cn) {
+    const block = cn.closest('.cn-block');
+    if (block) block.hidden = false;
+  }
+  const cp = $('#draw-checkpoints');
+  if (cp) cp.hidden = false;
   renderControlnetModels();
   if (state.cnImage) showControlPreview(state.cnImage);
   // size/cfg follow whichever checkpoint is loaded
@@ -2612,6 +2725,30 @@ function controlnetPayload() {
 async function generateImage(opts = {}) {
   const prompt = (opts.prompt || '').trim();
   if (!prompt) { toast('先写点提示词', 'err'); return null; }
+
+  // Qwen-Image goes through ComfyUI; everything else through the SD WebUI.
+  // They are separate services, so the request shape differs.
+  if (state.drawBackend === 'comfy') {
+    if (!((state.comfy || {}).ready)) {
+      toast('Qwen 图像没就绪', 'err');
+      return null;
+    }
+    const [qw, qh] = String(opts.size || '1024x1024').split('x').map(Number);
+    const rq = await fetch('/api/comfy/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        negative_prompt: opts.negative || '',
+        width: qw, height: qh,
+        steps: opts.steps, cfg_scale: opts.cfg,
+        seed: opts.seed,
+      }),
+    }).then(x => x.json()).catch(e => ({ ok: false, message: String(e) }));
+    if (!rq.ok) { toast(rq.message || '生成失败', 'err'); return null; }
+    return rq;
+  }
+
   if (!sdReady()) { toast('SD 还没启动', 'err'); return null; }
 
   const [w, h] = String(opts.size || '832x832').split('x').map(Number);
@@ -3418,11 +3555,15 @@ window.ChengXin = {
   rebuildSizeOptions,
   renderControlnetModels,
   openDraw,
+  openQwen,
+  generateImage,
   openSettings,
   openTts,
   newChat,
   startRecording,
   stopRecording,
+  startComfy,
+  stopComfy,
   get recorder() { return Recorder; },
   version: () => (state.hubVersion || ''),
 };

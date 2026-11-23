@@ -5,6 +5,7 @@
 因为只有一张 12GB 显卡，**四个 GPU 服务（9B、35B、SD、TTS）同一时刻只能跑一个**。软件会替你把这件事管好：启动新的之前先问你要不要卸载旧的，绝不会偷偷换模型把显存撑爆。
 
 翻译服务和语音识别都是例外：它们跑在 CPU 上，只占一点内存，可以和其他任何服务同时工作。
+ComfyUI 和 SD 一样占满显卡，两者也互斥——启动一个会自动卸载另一个。
 
 > 仓库名 **5070-AI** 来自开发时用的那张 RTX 5070——项目要解决的核心问题就是「一张卡怎么安排这么多模型」。界面里显示的名字是**橙芯绘话**。
 
@@ -363,6 +364,12 @@ RTX 5070（12GB）、Q6_K / Q4_K_M 量化下，用 `/v1/chat/completions` 返回
 > 这些数字和模型、量化等级、上下文长度都有关。换成 Q4_K_M 会更快，Q8_0 会
 > 更慢；35B 的实测约 40 tok/s（MoE 结构，体积大但每 token 只激活部分专家）。
 
+### Qwen 图像（ComfyUI）
+
+- 端口 **8188**，独立进程，和 SD 互斥
+- 跑 Qwen-Image 2.1 Turbo，中文提示词直接可用
+- 需要单独装 ComfyUI，见[Qwen 图像](#qwen-图像comfyui)
+
 ### 语音识别（CPU，不占显存）
 
 - 端口 **8092**，`faster-whisper` 跑在 CPU 上
@@ -508,6 +515,49 @@ ControlNet 让生成的画面沿用你给的参考图的结构——姿势、轮
 - **停止引导**（0.1-1）：生成到一半时松开参考图。0.6 左右能让前半段严格跟随、后半段自由发挥
 
 参考图会自动缩到 1024 像素再上传，微信里的原图也能直接用。
+
+---
+
+## Qwen 图像（ComfyUI）
+
+除了 SD，还接了一套 **ComfyUI** 专门跑 Qwen-Image——SD WebUI 加载不了这类新架构的模型。
+
+**为什么要两套**
+
+| | SD WebUI | ComfyUI |
+|---|---|---|
+| 能跑的模型 | SD1.5 / SDXL | 任意（含 Qwen-Image） |
+| 出图速度 | 17 秒（RealVisXL） | 2 秒（Qwen，热缓存） |
+| 中文提示词 | 要先翻译成英文 | **原生支持** |
+
+两者共用显卡，所以同一时间只能开一个。点「启动」会自动把另一个卸掉。
+
+**实测数据**（RTX 5070 12GB）
+
+| 项目 | 数值 |
+|---|---|
+| 显存占用 | 8.7 GB |
+| 首次出图 | 108 秒（含加载模型） |
+| 后续出图 | **2 秒** |
+| 分辨率 | 1024×1024 |
+| 步数 / CFG | 8 / 1.0（Turbo 模型的甜点值） |
+
+**三个组件缺一不可**
+
+Qwen-Image 不是单个文件，需要三样东西：
+
+| 角色 | 文件 | 大小 |
+|---|---|---|
+| 主模型 | `qwen-image-2.1-turbo-Q4_K_M.gguf` | 3.9 GB |
+| 文本编码器 | `qwen3vl_8b_w4a8.safetensors` | 5.9 GB |
+| VAE | `qwen_image_2.1_vae_bf16.safetensors` | 0.6 GB |
+
+放在 `ComfyUI/models/` 下的 `unet`、`clip/text_encoders`、`vae` 三个目录里。
+
+**许可证提醒**
+
+Qwen-Image 用的是 **Qwen Research License**，非商用。自己玩没问题，商用要单独申请。
+SDXL 那几个是 openrail++，可以商用。
 
 ---
 
@@ -730,6 +780,9 @@ hub 在 `127.0.0.1:8090` 上提供这些接口：
 | POST | `/api/sd/save` | 保存图片到 outputs |
 | POST | `/api/tts/start` `/stop` | 启动/停止语音 |
 | POST | `/api/tts/speak` | 合成语音 `{text, voice}` |
+| POST | `/api/comfy/start` `/api/comfy/stop` | 启停 ComfyUI |
+| POST | `/api/comfy/generate` | Qwen-Image 出图 |
+| GET | `/api/comfy/log` | ComfyUI 日志 |
 | POST | `/api/stt` | 语音转文字（原始音频 body） |
 | GET | `/api/tts/log` `/api/sd/log` | 服务日志 |
 | GET | `/api/chats` | 读会话 |

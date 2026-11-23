@@ -39,6 +39,7 @@
 
         <div class="section-title"><span>绘图</span><button id="open-draw" title="打开 SD 绘图面板">画一张</button></div>
         <div id="sd-card"></div>
+        <div id="comfy-card"></div>
 
         <div class="section-title"><span>语音</span><button id="open-tts" title="打开语音合成面板">朗读</button></div>
         <div id="tts-card"></div>
@@ -252,7 +253,7 @@
 
 <div class="modal" id="draw-modal">
   <div class="sheet" style="width:min(760px,calc(100vw - 48px))">
-    <header><span>SD 绘图</span><span class="grow"></span><button data-close="draw-modal">关闭</button></header>
+    <header><span id="draw-title">SD 绘图</span><span class="grow"></span><button data-close="draw-modal">关闭</button></header>
     <div class="content">
       <div class="form">
         <label class="row col">

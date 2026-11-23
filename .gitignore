@@ -32,3 +32,6 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# local tooling (7zr is fetched on demand, not vendored)
+tools/7zip/

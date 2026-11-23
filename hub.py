@@ -40,6 +40,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import comfy_backend
 import config
 import download
 
@@ -53,7 +54,7 @@ PORT = 8090
 # Single source of truth for the version. It shows up in the HTTP Server header,
 # in /api/state, and in the sidebar footer, so it is defined once here.
 APP_NAME = "5070-AI"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 APP_TITLE = "橙芯绘话"          # window title, also how we find the window
 
 # --------------------------------------------------------------------------
@@ -1659,6 +1660,89 @@ def stt_transcribe(raw: bytes) -> dict:
         return {"ok": False, "message": f"识别请求失败：{exc}"}
 
 
+def comfy_probe() -> dict:
+    """State of the ComfyUI / Qwen-Image backend."""
+    try:
+        return comfy_backend.probe()
+    except Exception as exc:  # noqa: BLE001
+        return {"label": "Qwen 图像", "up": False, "loading": False,
+                "port": comfy_backend.COMFY_PORT, "dir": comfy_backend.COMFY_DIR,
+                "error": str(exc)[:160], "models": [], "ready": False}
+
+
+def comfy_start() -> dict:
+    """Start ComfyUI, releasing the GPU from whoever holds it."""
+    # The others have to go even when ComfyUI is already up: otherwise a
+    # manually started instance leaves SD holding half the card.
+    freed = stop_all_models(keep="comfy")
+    if comfy_backend.is_up():
+        note = f"（已卸载 {'、'.join(freed)}）" if freed else ""
+        return {"ok": True, "message": "ComfyUI 已经在运行" + note}
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log = os.path.join(LOG_DIR, "comfy.log")
+    res = comfy_backend.start(log)
+    if res.get("ok"):
+        note = f"（已卸载 {'、'.join(freed)}）" if freed else ""
+        res["message"] = res.get("message", "") + note
+    return res
+
+
+def comfy_stop() -> dict:
+    return comfy_backend.stop()
+
+
+def comfy_generate(payload: dict) -> dict:
+    """Render with Qwen-Image through ComfyUI."""
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        return {"ok": False, "message": "提示词是空的"}
+    if not comfy_backend.is_up():
+        return {"ok": False, "message": "ComfyUI 没有在运行，先启动它"}
+
+    negative = str(payload.get("negative_prompt") or "").strip()
+    seed = int(payload.get("seed") or -1)
+    steps = max(1, min(60, int(payload.get("steps") or comfy_backend.QWEN_STEPS)))
+    cfg = float(payload.get("cfg_scale") or comfy_backend.QWEN_CFG)
+    width = max(256, min(2048, int(payload.get("width") or 1024)))
+    height = max(256, min(2048, int(payload.get("height") or 1024)))
+
+    job_begin("comfy", label=prompt[:40])
+
+    def progress(elapsed: float) -> None:
+        # this workflow reports no percentage, so estimate from elapsed time:
+        # a warm model settles in about 2 s, a cold one takes a minute or two
+        job_set("comfy", progress=min(0.95, elapsed / 25.0), label="正在生成")
+
+    # Same shape as sd_generate: the render runs on a worker and this thread
+    # only waits for it. Doing the whole thing inline blocks the handler while
+    # ComfyUI is busy, and the browser drops the connection.
+    result_box: dict = {}
+
+    def worker() -> None:
+        try:
+            result_box["res"] = comfy_backend.generate(
+                prompt, negative, seed, steps, cfg, width, height,
+                on_progress=progress)
+        except Exception as exc:  # noqa: BLE001
+            result_box["error"] = str(exc)
+
+    th = threading.Thread(target=worker, daemon=True)
+    th.start()
+    th.join(timeout=900)
+
+    if result_box.get("error"):
+        job_finish("comfy", error=result_box["error"])
+        return {"ok": False, "message": f"生成失败：{result_box['error']}"}
+    res = result_box.get("res") or {}
+    if not res.get("ok"):
+        job_finish("comfy", error=res.get("message"))
+        return res
+
+    job_finish("comfy", result={"ok": True, "count": len(res.get("images") or [])})
+    res["original_prompt"] = prompt
+    return res
+
+
 def stt_probe() -> dict:
     cfg = stt_conf()
     port = int(cfg.get("port") or 8092)
@@ -1876,6 +1960,8 @@ JOBS: dict[str, dict] = {
     "download": {"state": "idle", "progress": 0.0, "label": "", "started": 0.0,
                  "result": None, "error": None,
                  "done_bytes": 0, "total_bytes": 0, "speed": 0.0},
+    "comfy": {"state": "idle", "progress": 0.0, "label": "", "started": 0.0,
+              "result": None, "error": None},
 }
 _jobs_lock = threading.Lock()
 
@@ -2111,6 +2197,7 @@ class Handler(BaseHTTPRequestHandler):
                 "sd": sd_probe(),
                 "tts": tts_probe(),
                 "stt": stt_probe(),
+                "comfy": comfy_probe(),
                 "hub": {"port": PORT, "name": APP_NAME,
                         "version": APP_VERSION,
                         # configuration mistakes worth showing in the UI
@@ -2122,6 +2209,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file_log(SD["log"])
         elif path == "/api/tts/log":
             self._serve_file_log(TTS["log"], label="tts")
+        elif path == "/api/comfy/log":
+            self._serve_file_log(os.path.join(LOG_DIR, "comfy.log"), label="comfy")
         elif path == "/api/progress":
             self._json({"sd": job_snapshot("sd"), "tts": job_snapshot("tts"),
                         "download": job_snapshot("download")})
@@ -2154,6 +2243,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             merged = merge_chats(data)
             self._json({"ok": True, "revision": len(merged["chats"])})
+        elif path == "/api/comfy/start":
+            with _spawn_lock:
+                self._json(comfy_start())
+        elif path == "/api/comfy/stop":
+            with _spawn_lock:
+                self._json(comfy_stop())
+        elif path == "/api/comfy/generate":
+            try:
+                payload = json.loads(body or b"{}")
+            except Exception:  # noqa: BLE001
+                self._json({"ok": False, "message": "bad payload"}, 400)
+                return
+            self._json(comfy_generate(payload if isinstance(payload, dict) else {}))
         elif path == "/api/stt":
             # raw audio body, not JSON: the browser posts a Blob directly
             audio = body or b""
@@ -2679,8 +2781,12 @@ def current_window_rect():
         return None
 
 
-def stop_all_models() -> list[str]:
-    """Unload every GPU user and free the VRAM. Returns labels stopped."""
+def stop_all_models(keep: str = "") -> list[str]:
+    """Unload every GPU user and free the VRAM. Returns labels stopped.
+
+    `keep` names the service that is about to start: everything else goes,
+    including a ComfyUI instance that happens to be running already.
+    """
     global _sd_spawning, _tts_spawning  # noqa: PLW0603
     stopped = []
     for cfg in MODELS.values():
@@ -2691,10 +2797,10 @@ def stop_all_models() -> list[str]:
             stopped.append(cfg["label"])
     # SD and TTS share the same card, so they go too: keeping either would
     # leave no room to load a language model back in.
-    if kill_port(SD["port"]):
+    if keep != "sd" and kill_port(SD["port"]):
         stopped.append(SD["label"])
         _sd_spawning = 0.0
-    if kill_port(TTS["port"]):
+    if keep != "tts" and kill_port(TTS["port"]):
         stopped.append(TTS["label"])
         _tts_spawning = 0.0
     # give the driver a moment to hand the memory back; SD/TTS starting right
@@ -2704,6 +2810,14 @@ def stop_all_models() -> list[str]:
             wait_port_free(cfg["port"], timeout=10)
         wait_port_free(SD["port"], timeout=10)
         wait_port_free(TTS["port"], timeout=10)
+    # ComfyUI holds the card as well
+    if keep != "comfy":
+        try:
+            if comfy_backend.is_up():
+                comfy_backend.stop()
+                stopped.append("Qwen 图像")
+        except Exception:  # noqa: BLE001
+            pass
     return stopped
 
 

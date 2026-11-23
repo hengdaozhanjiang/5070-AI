@@ -1,0 +1,244 @@
+"""ComfyUI backend: the only practical way to run Qwen-Image here.
+
+AUTOMATIC1111 cannot load MMDiT models such as Qwen-Image, so the SD WebUI in
+this project stays on SD1.5/SDXL while ComfyUI handles the newer ones. Both
+share the GPU and therefore the same mutual-exclusion rule.
+
+ComfyUI exposes a JSON API: POST /prompt queues a workflow, GET /history/<id>
+reports the result, and /view serves the finished picture.
+"""
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+import urllib.error
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# --- configuration ----------------------------------------------------------
+
+COMFY_DIR = r"D:\AI\ComfyUI_windows_portable\ComfyUI"
+COMFY_PYTHON = r"C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe"
+COMFY_PORT = 8188
+
+# the three pieces Qwen-Image needs
+QWEN_UNET = "qwen-image-2.1-turbo-Q4_K_M.gguf"
+QWEN_CLIP = r"text_encoders\qwen3vl_8b_w4a8.safetensors"
+QWEN_VAE = "qwen_image_2.1_vae_bf16.safetensors"
+
+# Turbo is distilled: few steps, low cfg. These are the values the model was
+# trained for; higher cfg makes it look over-cooked.
+QWEN_STEPS = 8
+QWEN_CFG = 1.0
+
+_state = {"up": False, "loading": False, "pid": 0, "error": None}
+
+
+def base() -> str:
+    return f"http://127.0.0.1:{COMFY_PORT}"
+
+
+def _get(path: str, timeout: int = 20):
+    req = urllib.request.Request(base() + path, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _post(path: str, obj, timeout: int = 300):
+    data = json.dumps(obj).encode("utf-8")
+    req = urllib.request.Request(base() + path, data=data,
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def is_up() -> bool:
+    try:
+        _get("/system_stats", timeout=6)
+        return True
+    except Exception:
+        return False
+
+
+def start(log_path: str | None = None) -> dict:
+    """Launch ComfyUI if it is not already running."""
+    if is_up():
+        return {"ok": True, "message": "ComfyUI 已经在运行"}
+    if not os.path.exists(COMFY_PYTHON):
+        return {"ok": False, "message": f"找不到 Python：{COMFY_PYTHON}"}
+    if not os.path.exists(os.path.join(COMFY_DIR, "main.py")):
+        return {"ok": False, "message": f"找不到 ComfyUI：{COMFY_DIR}"}
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = COMFY_DIR
+    env.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
+    log = open(log_path, "ab", buffering=0) if log_path else subprocess.DEVNULL
+    try:
+        proc = subprocess.Popen(
+            [COMFY_PYTHON, "main.py", "--port", str(COMFY_PORT),
+             "--listen", "127.0.0.1", "--disable-auto-launch"],
+            cwd=COMFY_DIR, env=env, stdin=subprocess.DEVNULL,
+            stdout=log, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"启动失败：{exc}"}
+    finally:
+        if log_path:
+            log.close()
+
+    _state["pid"] = proc.pid
+    _state["loading"] = True
+    return {"ok": True, "message": f"ComfyUI 开始启动（PID {proc.pid}），首次约 10-20 秒"}
+
+
+def stop() -> dict:
+    pid = _state.get("pid")
+    killed = []
+    if pid:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                       capture_output=True, text=True, timeout=20,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        killed.append(pid)
+    _state.update({"up": False, "loading": False, "pid": 0})
+    return {"ok": True, "message": "ComfyUI 已停止"}
+
+
+def probe() -> dict:
+    """State for the sidebar card."""
+    info = {"label": "Qwen 图像", "up": is_up(), "loading": False,
+            "port": COMFY_PORT, "dir": COMFY_DIR, "error": None,
+            "models": [], "ready": False}
+    if not info["up"]:
+        return info
+    try:
+        stats = _get("/system_stats", timeout=10)
+        for dev in stats.get("devices") or []:
+            info["vram_total"] = (dev.get("vram_total") or 0) // 1024 ** 2
+            info["vram_free"] = (dev.get("vram_free") or 0) // 1024 ** 2
+            info["gpu"] = dev.get("name")
+    except Exception:
+        pass
+    # which models are actually present
+    unet_dir = os.path.join(COMFY_DIR, "models", "unet")
+    clip_dir = os.path.join(COMFY_DIR, "models", "clip")
+    vae_dir = os.path.join(COMFY_DIR, "models", "vae")
+    for label, folder, name in (
+        ("unet", unet_dir, QWEN_UNET),
+        # ComfyUI lists text encoders under clip\text_encoders\
+        ("text encoder", clip_dir, os.path.join("text_encoders",
+                                               "qwen3vl_8b_w4a8.safetensors")),
+        ("vae", vae_dir, QWEN_VAE),
+    ):
+        path = os.path.join(folder, name)
+        ok = os.path.exists(path)
+        info["models"].append({"role": label, "file": name, "ok": ok,
+                               "bytes": os.path.getsize(path) if ok else 0})
+    info["ready"] = all(m["ok"] for m in info["models"])
+    return info
+
+
+def build_workflow(prompt: str, negative: str = "", seed: int = -1,
+                   steps: int = QWEN_STEPS, cfg: float = QWEN_CFG,
+                   width: int = 1024, height: int = 1024) -> dict:
+    """The node graph Qwen-Image 2.1 expects.
+
+    TextEncodeQwenImage21 also emits the latent, so there is no separate
+    EmptyLatent node: feeding one in makes the sampler choke.
+    """
+    # ComfyUI rejects a negative seed (the SD WebUI treats -1 as "random"),
+    # so resolve it here instead of passing -1 through. Track the resolved
+    # value separately so the caller can show which one was used.
+    if seed is None or seed < 0:
+        seed = int(time.time() * 1000) % (2 ** 32)
+    used_seed = seed
+
+    workflow = {
+        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": QWEN_UNET}},
+        "2": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": QWEN_CLIP, "type": "qwen_image"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": QWEN_VAE}},
+        "4": {"class_type": "TextEncodeQwenImage21",
+              "inputs": {"clip": ["2", 0], "prompt": prompt,
+                         "negative_prompt": negative, "resolution": max(width, height),
+                         "images": None, "vae": ["3", 0]}},
+        "6": {"class_type": "KSampler",
+              "inputs": {"model": ["1", 0], "positive": ["4", 0],
+                         "negative": ["4", 1], "latent_image": ["4", 2],
+                         "seed": seed, "steps": steps, "cfg": cfg,
+                         "sampler_name": "euler", "scheduler": "simple",
+                         "denoise": 1.0}},
+        "7": {"class_type": "VAEDecode",
+              "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
+        "8": {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": "qwen", "images": ["7", 0]}},
+    }
+    return workflow, used_seed
+
+
+def generate(prompt: str, negative: str = "", seed: int = -1,
+              steps: int = QWEN_STEPS, cfg: float = QWEN_CFG,
+              width: int = 1024, height: int = 1024,
+              on_progress=None) -> dict:
+    """Queue the workflow and wait for the picture."""
+    # ComfyUI refuses a negative seed (the SD WebUI treats -1 as "random"), so
+    # resolve it here and report back the value that was actually used
+    if seed is None or seed < 0:
+        seed = int(time.time() * 1000) % (2 ** 32)
+    if not is_up():
+        return {"ok": False, "message": "ComfyUI 没有在运行"}
+    wf, used_seed = build_workflow(prompt, negative, seed, steps, cfg,
+                                  width, height)
+    try:
+        res = _post("/prompt", {"prompt": wf, "client_id": "5070-ai"}, timeout=120)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        return {"ok": False, "message": f"工作流被拒绝：{body[:300]}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"提交失败：{exc}"}
+
+    p_id = res.get("prompt_id")
+    if not p_id:
+        return {"ok": False, "message": f"没有拿到 prompt_id：{res}"}
+
+    started = time.time()
+    deadline = started + 900
+    while time.time() < deadline:
+        try:
+            hist = _get(f"/history/{p_id}", timeout=20)
+        except Exception:
+            time.sleep(2)
+            continue
+        if p_id in hist:
+            entry = hist[p_id]
+            status = entry.get("status", {})
+            images = []
+            for node_out in (entry.get("outputs") or {}).values():
+                images.extend(node_out.get("images", []) or [])
+            if images:
+                im = images[0]
+                url = (f"{base()}/view?filename={im.get('filename')}"
+                       f"&subfolder={im.get('subfolder', '')}"
+                       f"&type={im.get('type', 'output')}")
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    raw = r.read()
+                import base64
+                data_url = "data:image/png;base64," + base64.b64encode(raw).decode()
+                return {"ok": True, "images": [data_url],
+                        "seed": used_seed, "elapsed": round(time.time() - started, 1),
+                        "prompt": prompt}
+            if status.get("status_str") == "error":
+                for m in status.get("messages", []):
+                    if isinstance(m, list) and len(m) > 1 and isinstance(m[1], dict):
+                        return {"ok": False,
+                                "message": str(m[1].get("exception_message", ""))[:300]}
+                return {"ok": False, "message": "生成失败"}
+        if on_progress:
+            on_progress(time.time() - started)
+        time.sleep(2)
+    return {"ok": False, "message": "生成超时"}
