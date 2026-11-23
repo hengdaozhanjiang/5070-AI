@@ -387,9 +387,16 @@
 </div>
 
 <div class="viewer" id="viewer">
-  <img alt="">
+  <div class="viewer-stage" id="viewer-stage">
+    <img alt="" id="viewer-img">
+  </div>
   <div class="viewer-bar">
-    <span class="viewer-hint">点击空白处关闭 · Esc</span>
+    <button id="viewer-zoom-out" title="缩小（滚轮也行）">−</button>
+    <span class="viewer-zoom" id="viewer-zoom">100%</span>
+    <button id="viewer-zoom-in" title="放大（滚轮也行）">+</button>
+    <button id="viewer-fit" title="适应窗口">适应</button>
+    <button id="viewer-actual" title="按原始像素显示（1:1）">1:1</button>
+    <span class="viewer-hint">拖拽移动 · 双击切换 · 点击空白关闭 · Esc</span>
     <button id="viewer-save">保存到本地</button>
   </div>
 </div>

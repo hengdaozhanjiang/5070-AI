@@ -1336,18 +1336,42 @@ html[data-theme="light"] .code-card { background: #f7f9fd; }
   padding: 24px;
 }
 .viewer.open { display: flex; }
+
+/* The stage is the scroll container: when the picture is zoomed past the
+   viewport you pan by dragging it or by scrolling here. */
+.viewer-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  cursor: grab;
+}
+.viewer-stage.dragging { cursor: grabbing; }
+
 .viewer img {
   display: block;
-  /* flex + explicit viewport-relative caps: percentage max-height inside a
-     grid track is computed against the content itself and lets big images
-     overflow the screen */
-  max-width: min(92vw, 1400px);
-  max-height: calc(100vh - 110px);
-  width: auto;
-  height: auto;
-  object-fit: contain;
+  /* width/height are set inline by the zoom code; leave the rest to CSS so
+     the transform and pixel size do not fight each other */
+  max-width: none;
+  max-height: none;
   border-radius: 10px;
   box-shadow: 0 20px 60px -20px rgba(0, 0, 0, .9);
+  user-select: none;
+  -webkit-user-drag: none;
+  image-rendering: auto;
+}
+/* at 1:1 and above, keep pixels crisp so detail is actually inspectable */
+.viewer img.crisp { image-rendering: pixelated; }
+
+.viewer-zoom {
+  min-width: 52px;
+  text-align: center;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
 }
 .viewer-bar {
   display: flex;

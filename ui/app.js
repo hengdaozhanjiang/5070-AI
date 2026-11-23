@@ -1257,12 +1257,19 @@ async function qwenInChat(chat, text) {
   // workflow, so the hub derives it from elapsed time.
   const stopTrack = trackJob('comfy', prog, '正在画');
 
+  // Use whatever the panel is set to, exactly like the SD path does. The size
+  // was hard-coded to 1024x1024 here, so a custom size chosen in the panel was
+  // ignored and every Qwen picture came out square.
+  // A panel that was never opened still holds the SD default (832x832); Qwen is
+  // native at 1024, so fall back to that instead.
+  const panelTouched = $('#draw-w') && $('#draw-w').dataset.touched === '1';
+  const size = panelTouched ? currentSize() : '1024x1024';
   const r = await generateImage({
     prompt: text,
-    negative: '',
-    size: '1024x1024',
-    steps: 8,
-    cfg: 1,
+    negative: $('#draw-neg') ? $('#draw-neg').value : '',
+    size,
+    steps: $('#draw-steps') ? Number($('#draw-steps').value) || 8 : 8,
+    cfg: $('#draw-cfg') ? Number($('#draw-cfg').value) || 1 : 1,
     seed: -1,
   });
   stopTrack();
@@ -2653,6 +2660,7 @@ function bindSizeInputs() {
   sel._sizeBound = true;
 
   sel.addEventListener('change', () => {
+    sel.dataset.touched = '1';
     if (sel.value === 'custom') {
       // start from whatever preset was showing, so the user edits a sane value
       const prev = [...sel.options].find(o => o.value !== 'custom' && o.defaultSelected);
@@ -2668,7 +2676,13 @@ function bindSizeInputs() {
 
   ['#draw-w', '#draw-h'].forEach(id => {
     const el = $(id);
-    if (el) el.addEventListener('input', () => { syncSizeUi(); saveDrawDraft(); });
+    if (el) {
+      el.addEventListener('input', () => {
+        el.dataset.touched = '1';
+        syncSizeUi();
+        saveDrawDraft();
+      });
+    }
   });
 
   const swap = $('#draw-swap');
@@ -3168,13 +3182,183 @@ function openInfo(id) {
   $('#info-modal').classList.add('open');
 }
 
+/* Picture viewer with zoom and pan.
+   A 1024 px render shown scaled-to-fit is too small to judge detail, so the
+   viewer starts fitted but can zoom from 10% to 800%, drag to pan, and jump to
+   1:1 for pixel-level inspection. */
+const Viewer = {
+  scale: 1,          // 1 = fitted to the window
+  fitScale: 1,       // scale at which the whole picture fits
+  natW: 0,
+  natH: 0,
+  open: false,
+  bound: false,
+};
+
+function viewerApply() {
+  const img = $('#viewer-img');
+  const label = $('#viewer-zoom');
+  if (!img || !Viewer.natW) return;
+  const px = Math.max(1, Math.round(Viewer.natW * Viewer.scale));
+  img.style.width = px + 'px';
+  img.style.height = 'auto';
+  img.classList.toggle('crisp', Viewer.scale >= 0.99);
+  // 100% means one image pixel per screen pixel, which is what people expect
+  // from a viewer; the fitted size is whatever percentage that works out to.
+  if (label) label.textContent = Math.round(Viewer.scale * 100) + '%';
+}
+
+/* Scale at which the picture fits the stage without scrolling. */
+function viewerFitScale() {
+  const stage = $('#viewer-stage');
+  if (!stage || !Viewer.natW) return 1;
+  const pad = 24;
+  const aw = Math.max(80, stage.clientWidth - pad);
+  const ah = Math.max(80, stage.clientHeight - pad);
+  return Math.min(aw / Viewer.natW, ah / Viewer.natH, 1);
+}
+
+function viewerZoom(factor, originEvent) {
+  const stage = $('#viewer-stage');
+  const img = $('#viewer-img');
+  if (!stage || !img) return;
+  const before = Viewer.scale;
+  Viewer.scale = Math.max(0.1, Math.min(8, Viewer.scale * factor));
+  if (Math.abs(before - Viewer.scale) < 1e-4) return;
+  viewerApply();
+
+  // keep the point under the cursor fixed while zooming
+  if (originEvent) {
+    const r = stage.getBoundingClientRect();
+    const cx = originEvent.clientX - r.left;
+    const cy = originEvent.clientY - r.top;
+    const ratio = Viewer.scale / before;
+    stage.scrollLeft = (stage.scrollLeft + cx) * ratio - cx;
+    stage.scrollTop = (stage.scrollTop + cy) * ratio - cy;
+  }
+}
+
+function viewerSetScale(scale) {
+  Viewer.scale = Math.max(0.1, Math.min(8, scale));
+  viewerApply();
+}
+
+function viewerFit() {
+  Viewer.scale = viewerFitScale();
+  viewerApply();
+  const stage = $('#viewer-stage');
+  if (stage) { stage.scrollLeft = 0; stage.scrollTop = 0; }
+}
+
+function viewerActual() {
+  viewerSetScale(1);
+  const stage = $('#viewer-stage');
+  if (stage) {
+    // centre the 1:1 view on the middle of the picture
+    stage.scrollLeft = Math.max(0, (Viewer.natW - stage.clientWidth) / 2);
+    stage.scrollTop = Math.max(0, (Viewer.natH - stage.clientHeight) / 2);
+  }
+}
+
+function bindViewerOnce() {
+  if (Viewer.bound) return;
+  Viewer.bound = true;
+  const stage = $('#viewer-stage');
+  const v = $('#viewer');
+  if (!stage || !v) return;
+
+  $('#viewer-zoom-in').onclick = () => viewerZoom(1.25);
+  $('#viewer-zoom-out').onclick = () => viewerZoom(1 / 1.25);
+  $('#viewer-fit').onclick = () => viewerFit();
+  $('#viewer-actual').onclick = () => viewerActual();
+
+  // wheel zooms; ctrl is not required so a plain scroll wheel works
+  stage.addEventListener('wheel', ev => {
+    ev.preventDefault();
+    viewerZoom(ev.deltaY < 0 ? 1.15 : 1 / 1.15, ev);
+  }, { passive: false });
+
+  // drag to pan
+  let dragging = false;
+  let sx = 0, sy = 0, sl = 0, st = 0, moved = 0;
+  stage.addEventListener('mousedown', ev => {
+    if (ev.button !== 0) return;
+    dragging = true;
+    moved = 0;
+    sx = ev.clientX; sy = ev.clientY;
+    sl = stage.scrollLeft; st = stage.scrollTop;
+    stage.classList.add('dragging');
+  });
+  window.addEventListener('mousemove', ev => {
+    if (!dragging) return;
+    const dx = ev.clientX - sx;
+    const dy = ev.clientY - sy;
+    moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
+    stage.scrollLeft = sl - dx;
+    stage.scrollTop = st - dy;
+  });
+  window.addEventListener('mouseup', () => {
+    dragging = false;
+    stage.classList.remove('dragging');
+  });
+
+  // double click toggles between fitted and 1:1
+  $('#viewer-img').addEventListener('dblclick', ev => {
+    ev.stopPropagation();
+    if (Viewer.scale >= 0.99) viewerFit();
+    else viewerActual();
+  });
+
+  // click on the empty area closes, but a drag must not count as a click
+  stage.addEventListener('click', ev => {
+    if (ev.target.id !== 'viewer-img' && moved < 6) closeViewer();
+    moved = 0;
+  });
+
+  // keep the fitted size correct when the window changes
+  window.addEventListener('resize', () => {
+    if (!Viewer.open) return;
+    const wasFitted = Math.abs(Viewer.scale - Viewer.fitScale) < 0.02;
+    Viewer.fitScale = viewerFitScale();
+    if (wasFitted) { Viewer.scale = Viewer.fitScale; viewerApply(); }
+  });
+}
+
 function openViewer(src) {
   const v = $('#viewer');
-  $('img', v).src = src;
+  const img = $('#viewer-img');
+  if (!v || !img) return;
+  bindViewerOnce();
   v.dataset.src = src;
   const btn = $('#viewer-save');
   if (btn) { btn.disabled = false; btn.textContent = '保存到本地'; }
+
+  // measure before showing so the fit calculation has real numbers
+  img.onload = () => {
+    Viewer.natW = img.naturalWidth || 1024;
+    Viewer.natH = img.naturalHeight || 1024;
+    Viewer.fitScale = viewerFitScale();
+    Viewer.scale = Viewer.fitScale;
+    viewerApply();
+  };
+  img.src = src;
+  if (img.complete && img.naturalWidth) img.onload();
+
   v.classList.add('open');
+  Viewer.open = true;
+  // the stage only has a size once it is displayed
+  requestAnimationFrame(() => {
+    Viewer.fitScale = viewerFitScale();
+    Viewer.scale = Viewer.fitScale;
+    viewerApply();
+  });
+}
+
+function closeViewer() {
+  const v = $('#viewer');
+  if (!v) return;
+  v.classList.remove('open');
+  Viewer.open = false;
 }
 
 /* Download the picture currently shown in the viewer via the hub, so the file
@@ -3337,11 +3521,14 @@ function bind() {
       if (m._resolve) m._resolve(false);
     }
   }));
-  // clicking the backdrop closes; clicking the picture or the toolbar does not
+  // clicking the backdrop closes; clicking the picture or the toolbar does not.
+  // The stage also has its own handler for this, but keeping the outer one means
+  // a click on the padding still closes the viewer.
   $('#viewer').onclick = ev => {
     if (ev.target.closest('.viewer-bar')) return;
-    if (ev.target.tagName === 'IMG') return;
-    $('#viewer').classList.remove('open');
+    if (ev.target.id === 'viewer-img') return;
+    if (ev.target.id === 'viewer-stage') return;   // handled by the pan logic
+    closeViewer();
   };
   $('#viewer-save').onclick = saveViewerImage;
 
@@ -3396,7 +3583,7 @@ function bind() {
           m.classList.remove('open');
           if (m._resolve) m._resolve(false);
         });
-        $('#viewer').classList.remove('open');
+        closeViewer();
         return;
       }
       if (state.streaming) {
@@ -3920,6 +4107,9 @@ window.ChengXin = {
   currentSize,
   snapSize,
   syncSizeUi,
+  openViewer,
+  closeViewer,
+  get viewer() { return Viewer; },
   send,
   isQwenThread,
   comfyReady,
