@@ -76,6 +76,7 @@ const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(
 // SD and TTS are not chat models, but their messages render like one.
 const SD_PSEUDO = { id: 'sd', label: 'Stable Diffusion', short: 'SD', color: '#ffa83d', up: false, port: null, ctx: null };
 const TTS_PSEUDO = { id: 'tts', label: '语音合成', short: 'TTS', color: '#8fd47a', up: false, port: null, ctx: null };
+const QWEN_PSEUDO = { id: 'qwen', label: 'Qwen 图像', short: 'QI', color: '#c084fc', up: false, port: null, ctx: null };
 
 /* True when the app itself drew pictures in this conversation.
    A picture the user uploaded is not a drawing thread, so only assistant
@@ -91,9 +92,16 @@ function isSpeakThread(chat) {
   return (chat.messages || []).some(m => m.role === 'assistant' && m.model === 'tts');
 }
 
+/* True when this conversation holds pictures Qwen-Image drew. */
+function isQwenThread(chat) {
+  if (!chat) return false;
+  return (chat.messages || []).some(m => m.role === 'assistant' && m.model === 'qwen');
+}
+
 function modelOf(id) {
   if (id === 'sd') return SD_PSEUDO;
   if (id === 'tts') return TTS_PSEUDO;
+  if (id === 'qwen') return QWEN_PSEUDO;
   const found = state.models.find(m => m.id === id);
   if (found) return found;
   // before the first /api/state answer we still know how the model is named
@@ -523,6 +531,8 @@ function renderServicesSummary() {
   else if (state.sd && state.sd.loading) bits.push('SD 启动中');
   if (state.tts && state.tts.up) bits.push('<span class="on">TTS</span>');
   else if (state.tts && state.tts.loading) bits.push('TTS 启动中');
+  if (state.comfy && state.comfy.up) bits.push('<span class="on">QI</span>');
+  else if (state.comfy && state.comfy.loading) bits.push('QI 启动中');
   if (!bits.length) {
     el.textContent = '未启动';
     return;
@@ -553,7 +563,8 @@ function renderConvList() {
     // Label by what the conversation actually contains (generated pictures or
     // speech), so the sidebar never claims "9B" for a drawing or speech thread.
     const m = isSpeakThread(c) ? TTS_PSEUDO
-      : (isDrawThread(c) ? SD_PSEUDO : modelOf(c.model));
+      : (isQwenThread(c) ? QWEN_PSEUDO
+        : (isDrawThread(c) ? SD_PSEUDO : modelOf(c.model)));
     const row = document.createElement('div');
     row.className = 'conv';
     row.setAttribute('aria-current', String(state.chat && c.id === state.chat.id));
@@ -575,54 +586,85 @@ function renderConvList() {
 function renderChips() {
   const m = state.chat ? modelOf(state.chat.model) : null;
   const sdOn = sdReady();
-  // A conversation the app drew pictures in stays a drawing thread even after
-  // SD is shut down, so the header says so instead of claiming "9B".
-  const picChat = isDrawThread(state.chat);
+  const qwenOn = comfyReady();
   const ttsOn = ttsReady();
+  // A conversation keeps its kind even after the service stops, so the header
+  // and hint explain why the button will not draw right now.
+  const picChat = isDrawThread(state.chat);
+  const qwenChat = isQwenThread(state.chat);
   const speakThread = isSpeakThread(state.chat);
-  const drawThread = sdOn || picChat;
-  $('#chip-model').textContent = ttsOn
-    ? '语音合成'
-    : (sdOn ? 'SD 绘图'
-            : (speakThread ? '语音 · 已停'
-                           : (picChat ? 'SD 绘图 · 已停'
-                                      : (m ? (m.port ? `${m.short} · :${m.port}` : m.short) : '—'))));
-  const spokenCount = (state.chat ? state.chat.messages : [])
-    .filter(x => x.role === 'assistant' && x.model === 'tts').length;
-  $('#chip-ctx').textContent = ttsOn
-    ? `${(state.tts.voices || []).length} 个音色`
-    : (sdOn
-        ? ((state.sd && state.sd.model || '').split(' [')[0].replace(/\.(safetensors|ckpt)$/i, '').slice(0, 26))
-        : (speakThread ? `${spokenCount} 段语音`
-          : (picChat
-              ? `${(state.chat.messages || [])
-                    .filter(x => x.role === 'assistant' && x.model === 'sd')
-                    .reduce((n, x) => n + (x.images || []).length, 0)} 张生成图`
-              : (m ? `ctx ${fmtCtx(m.n_ctx || m.ctx)}` : 'ctx —'))));
+  const drawThread = sdOn || qwenOn || picChat || qwenChat;
+
+  const countImages = model => (state.chat ? state.chat.messages : [])
+    .filter(x => x.role === 'assistant' && x.model === model)
+    .reduce((n, x) => n + (x.images || []).length, 0);
+
+  if (ttsOn) {
+    $('#chip-model').textContent = '语音合成';
+    $('#chip-ctx').textContent = `${(state.tts.voices || []).length} 个音色`;
+  } else if (qwenOn) {
+    $('#chip-model').textContent = 'Qwen 绘图';
+    $('#chip-ctx').textContent = 'Qwen-Image Turbo';
+  } else if (sdOn) {
+    $('#chip-model').textContent = 'SD 绘图';
+    $('#chip-ctx').textContent = ((state.sd && state.sd.model) || '')
+      .split(' [')[0].replace(/\.(safetensors|ckpt)$/i, '').slice(0, 26);
+  } else if (speakThread) {
+    $('#chip-model').textContent = '语音 · 已停';
+    const spokenCount = (state.chat ? state.chat.messages : [])
+      .filter(x => x.role === 'assistant' && x.model === 'tts').length;
+    $('#chip-ctx').textContent = `${spokenCount} 段语音`;
+  } else if (qwenChat) {
+    $('#chip-model').textContent = 'Qwen 绘图 · 已停';
+    $('#chip-ctx').textContent = `${countImages('qwen')} 张生成图`;
+  } else if (picChat) {
+    $('#chip-model').textContent = 'SD 绘图 · 已停';
+    $('#chip-ctx').textContent = `${countImages('sd')} 张生成图`;
+  } else {
+    $('#chip-model').textContent = m ? (m.port ? `${m.short} · :${m.port}` : m.short) : '—';
+    $('#chip-ctx').textContent = m ? `ctx ${fmtCtx(m.n_ctx || m.ctx)}` : 'ctx —';
+  }
+
   const used = state.chat ? state.chat.messages.reduce((a, x) => a + (x.tokens || 0), 0) : 0;
   $('#chip-use').textContent = ttsOn
     ? '本地合成'
-    : (drawThread ? (sdOn ? '离线翻译' : '绘图记录') : `${fmtNum(used)} tok`);
+    : (drawThread ? ((sdOn || qwenOn) ? '本地绘图' : '绘图记录') : `${fmtNum(used)} tok`);
+
   document.documentElement.style.setProperty('--mcolor',
-    ttsOn ? '#8fd47a' : (drawThread ? '#ffa83d' : (m ? m.color : '#ffa83d')));
-  $('#hint').textContent = ttsOn ? '' : (sdOn ? '' : (speakThread
-    ? '这是语音对话 · 想再合成请先启动语音服务'
-    : (picChat
-        ? '这是绘图对话 · 想再画请先启动 SD'
-        : (m ? (m.up ? `${m.label} 就绪 · 支持图片` : `${m.label} 未启动，先点左侧“启动”`)
-             : '9B 快答 · 35B 深思'))));
+    ttsOn ? '#8fd47a'
+      : (qwenOn || qwenChat ? '#c084fc'
+        : (drawThread ? '#ffa83d' : (m ? m.color : '#ffa83d'))));
+
+  if (ttsOn || sdOn || qwenOn) {
+    $('#hint').textContent = '';
+  } else if (speakThread) {
+    $('#hint').textContent = '这是语音对话 · 想再合成请先启动语音服务';
+  } else if (qwenChat) {
+    $('#hint').textContent = '这是 Qwen 绘图对话 · 想再画请先启动 Qwen 图像';
+  } else if (picChat) {
+    $('#hint').textContent = '这是绘图对话 · 想再画请先启动 SD';
+  } else {
+    $('#hint').textContent = m
+      ? (m.up ? `${m.label} 就绪 · 支持图片` : `${m.label} 未启动，先点左侧“启动”`)
+      : '9B 快答 · 35B 深思';
+  }
+
   const input = $('#input');
   if (input) {
-    input.placeholder = ttsOn
-      ? '输入要朗读的文字，回车合成'
-      : (sdOn
-          ? '描述画面，回车出图'
-          : (picChat ? 'SD 已停止，启动后可继续画；也可直接给模型发消息'
-                     : '给本地模型发消息…  （Enter 发送，Shift+Enter 换行，可粘贴或拖入图片）'));
+    if (ttsOn) input.placeholder = '输入要朗读的文字，回车合成';
+    else if (qwenOn) input.placeholder = '描述你想要的画面，回车出图（中文直接可用）';
+    else if (sdOn) input.placeholder = '描述画面，回车出图';
+    else if (qwenChat) input.placeholder = 'Qwen 已停止，启动后可继续画；也可直接给模型发消息';
+    else if (picChat) input.placeholder = 'SD 已停止，启动后可继续画；也可直接给模型发消息';
+    else input.placeholder = '给本地模型发消息…  （Enter 发送，Shift+Enter 换行，可粘贴或拖入图片）';
   }
+
   $('#chat-title').textContent = state.chat ? (state.chat.title || '新对话') : '新对话';
   const btn = $('#send');
-  btn.style.setProperty('--mcolor', m ? m.color : '#ffa83d');
+  // the send button follows the conversation colour, so a Qwen thread reads
+  // purple and an SD thread orange
+  btn.style.setProperty('--mcolor',
+    ttsOn ? '#8fd47a' : (qwenOn || qwenChat ? '#c084fc' : (m ? m.color : '#ffa83d')));
   renderContinueChip();
 }
 
@@ -669,6 +711,42 @@ function buildDrawHero() {
   return hero;
 }
 
+/* Starter panel shown in a fresh conversation while Qwen-Image runs. */
+const QWEN_IDEAS = [
+  { t: '中文直接出图', d: '不用先翻成英文', prompt: '一只橘猫趴在窗台上晒太阳，背景是模糊的城市' },
+  { t: '带文字的海报', d: 'Qwen 的文字渲染比较准', prompt: '一张极简风格的咖啡海报，标题写“早安”，暖黄色调' },
+  { t: '产品概念图', d: '干净背景，适合做展示', prompt: '一款白色无线耳机悬浮在浅灰色背景上，柔和棚拍光' },
+  { t: '国风插画', d: '水墨质感', prompt: '远山云雾，一叶小舟，水墨画风格，留白构图' },
+];
+
+function buildQwenHero() {
+  const c = state.comfy || {};
+  const gpu = c.vram_total ? ` · 显存 ${c.vram_free}/${c.vram_total}G` : '';
+  const hero = document.createElement('div');
+  hero.className = 'hero draw-hero qwen-hero';
+  hero.innerHTML = `
+    <div class="draw-badge" style="background:linear-gradient(150deg,#c084fc,#6b21a8);color:#fff">QI</div>
+    <h2>描述你想要的画面</h2>
+    <p>直接写中文，回车出图${gpu}${' · '}Qwen-Image 2.1 Turbo</p>
+    <div class="suggest draw-ideas">
+      ${QWEN_IDEAS.map((s, i) => `<button data-i="${i}"><b>${escapeHtml(s.t)}</b>${escapeHtml(s.d)}</button>`).join('')}
+    </div>
+    <div class="draw-hero-foot">
+      <button id="hero-open-qwen" class="mini-btn">打开绘图面板（改尺寸 / 步数）</button>
+    </div>`;
+  $$('.draw-ideas button', hero).forEach(b => {
+    b.onclick = () => {
+      const idea = QWEN_IDEAS[+b.dataset.i];
+      $('#input').value = idea.prompt;
+      autoGrow();
+      $('#input').focus();
+    };
+  });
+  const openBtn = $('#hero-open-qwen', hero);
+  if (openBtn) openBtn.onclick = () => openQwen();
+  return hero;
+}
+
 /* Starter panel shown in a fresh conversation while speech synthesis runs. */
 const SPEAK_IDEAS = [
   { t: '读一段新闻', d: '干净叙述，适合播报', prompt: '今天的天气预报：全国大部分地区晴到多云，气温回升，适合外出。' },
@@ -712,8 +790,14 @@ function renderThread() {
   const chat = state.chat;
 
   if (!chat || !chat.messages.length) {
-    // With SD running the chat box IS the prompt box, so a brand-new
-    // conversation should open as a drawing panel, not a chat welcome.
+    // With a drawing backend running the chat box IS the prompt box, so a
+    // brand-new conversation opens as a drawing panel, not a chat welcome.
+    // Qwen is checked first: it and SD never run together, but the order makes
+    // the intent obvious.
+    if (comfyReady()) {
+      inner.appendChild(buildQwenHero());
+      return;
+    }
     if (sdReady()) {
       inner.appendChild(buildDrawHero());
       return;
@@ -901,7 +985,8 @@ function newChat(modelId) {
   // No chat model can be loaded while SD or TTS holds the GPU, so a new
   // conversation belongs to whichever service is running. Tagging it correctly
   // keeps the sidebar honest and avoids a pointless model swap later.
-  const auto = ttsReady() ? 'tts' : (sdReady() ? 'sd' : defaultModelId());
+  const auto = ttsReady() ? 'tts'
+    : (comfyReady() ? 'qwen' : (sdReady() ? 'sd' : defaultModelId()));
   const model = modelId || auto;
   const chat = {
     id: uid(),
@@ -960,24 +1045,30 @@ function parseDrawRequest(text) {
 /* Render one SD picture as an assistant message inside the conversation. */
 /* Build the chat message element for an SD result once it is available.
    `regen` is an optional callback for the "再来一张" button. */
-function appendSdResult(chat, prompt, result, elapsedMs, regen) {
+function appendSdResult(chat, prompt, result, elapsedMs, regen, backend = 'sd') {
+  // Qwen messages carry model "qwen" so the conversation is tagged with the
+  // right label, and the bubble reuses the same layout as an SD drawing.
+  const isQwen = backend === 'qwen';
+  const who = isQwen ? 'Qwen 图像' : 'Stable Diffusion';
+  const short = isQwen ? 'QI' : 'SD';
+  const colour = isQwen ? '#c084fc' : '#ffa83d';
   const msg = {
-    role: 'assistant', content: '', model: 'sd', ts: Date.now(), images: [],
-    ms: Math.round(elapsedMs),
+    role: 'assistant', content: '', model: isQwen ? 'qwen' : 'sd',
+    ts: Date.now(), images: [], ms: Math.round(elapsedMs),
   };
   const el = document.createElement('div');
   el.className = 'msg assistant';
-  el.style.setProperty('--mcolor', '#ffa83d');
+  el.style.setProperty('--mcolor', colour);
   el.innerHTML = `
-    <div class="avatar">SD</div>
+    <div class="avatar">${short}</div>
     <div class="body">
-      <div class="who"><b>Stable Diffusion</b><span class="time">刚刚</span></div>
+      <div class="who"><b>${who}</b><span class="time">刚刚</span></div>
       <div class="bubble md"><div class="text"></div></div>
       <div class="msg-foot"></div>
     </div>`;
 
   const images = result.images || [];
-  msg.images = images.map(src => ({ dataUrl: src, name: 'sd.png' }));
+  msg.images = images.map(src => ({ dataUrl: src, name: isQwen ? 'qwen.png' : 'sd.png' }));
   const secs = (elapsedMs / 1000).toFixed(1);
   const textBox = $('.text', el);
   const usedPrompt = result.translated_prompt || result.prompt || prompt;
@@ -1129,6 +1220,71 @@ async function drawInChat(chat, ask, originalText) {
     () => drawInChat(chat, ask, originalText));
 }
 
+/* Draw with Qwen-Image inside the conversation. Mirrors drawInChat but talks
+   to ComfyUI: no translator, no interrupt endpoint, different defaults. */
+async function qwenInChat(chat, text) {
+  chat.messages.push({ role: 'user', content: text, images: [], ts: Date.now() });
+  if (chat.title === '新对话') chat.title = text.slice(0, 40).replace(/\s+/g, ' ');
+
+  const el = document.createElement('div');
+  el.className = 'msg assistant';
+  el.style.setProperty('--mcolor', '#c084fc');
+  el.innerHTML = `
+    <div class="avatar">QI</div>
+    <div class="body">
+      <div class="who"><b>Qwen 图像</b><span class="time">刚刚</span></div>
+      <div class="bubble md"><div class="text"><span class="thinking"><i></i><i></i><i></i> 正在画…</span></div></div>
+      <div class="msg-foot"></div>
+    </div>`;
+  const hero = $('.hero', $('#thread-inner'));
+  if (hero) hero.remove();
+  $('#thread-inner').appendChild(el);
+  scrollToBottom(true);
+
+  renderConvList();
+  persist();
+
+  const started = performance.now();
+  const prog = document.createElement('div');
+  prog.className = 'tts-prog';
+  $('.bubble', el).appendChild(prog);
+
+  // ComfyUI reports no percentage, so feed progressBar a synthetic job: it
+  // renders the same bar the SD path uses. A cold model loads for about a
+  // minute, so the estimate leans slow rather than finishing early.
+  const t0 = Date.now();
+  const ticker = setInterval(() => {
+    const secs = (Date.now() - t0) / 1000;
+    progressBar(prog, {
+      state: 'running',
+      progress: Math.min(0.92, secs / 25),
+      label: '正在画',
+      started: Math.round(t0 / 1000),
+    }, '正在画');
+  }, 500);
+
+  const r = await generateImage({
+    prompt: text,
+    negative: '',
+    size: '1024x1024',
+    steps: 8,
+    cfg: 1,
+    seed: -1,
+  });
+  clearInterval(ticker);
+  prog.innerHTML = '';
+
+  if (!r) {
+    appendSdError(el, '画不出来。Qwen 图像可能没启动，点下面按钮启动。');
+    persist();
+    return;
+  }
+
+  el.remove();
+  appendSdResult(chat, text, r, performance.now() - started,
+    () => qwenInChat(chat, text), 'qwen');
+}
+
 function selectModel(id) {
   if (!state.chat) { newChat(id); return; }
   if (state.chat.model === id) return;
@@ -1187,6 +1343,21 @@ async function send(textOverride) {
       await speakInChat(chat, text);
     } finally {
       state.speaking = false;
+    }
+    return;
+  }
+
+  // Qwen-Image running means the chat box is its prompt box: whatever you type
+  // becomes a picture. It is checked before SD because the two never coexist.
+  if (!images.length && comfyReady()) {
+    if (state.drawing) return;
+    state.drawing = true;
+    input.value = '';
+    autoGrow();
+    try {
+      await qwenInChat(chat, text);
+    } finally {
+      state.drawing = false;
     }
     return;
   }
@@ -1890,12 +2061,14 @@ async function pollState(force = false) {
     const data = await r.json();
     const sdWas = sdReady();
     const ttsWas = ttsReady();
+    const qwenWas = comfyReady();
     state.models = data.models || [];
     state.sd = data.sd || null;
     state.tts = data.tts || null;
     state.comfy = data.comfy || null;
     const sdNow = sdReady();
     const ttsNow = ttsReady();
+    const qwenNow = comfyReady();
     const hub = data.hub || {};
     $('#hub-dot').classList.toggle('off', !state.models.length);
     $('#hub-text').textContent = `hub :${hub.port || '—'}`;
@@ -1917,7 +2090,10 @@ async function pollState(force = false) {
     renderChips();
     // an empty conversation shows a different starter panel depending on which
     // service is up, so redraw whenever either flag flips
-    if ((sdWas !== sdNow || ttsWas !== ttsNow)
+    // Starting or stopping a service changes what an empty conversation shows,
+    // so watch all three - forgetting Qwen here left the starter panel stale
+    // after it started.
+    if ((sdWas !== sdNow || ttsWas !== ttsNow || qwenWas !== qwenNow)
         && state.chat && !state.chat.messages.length) {
       renderThread();
     }
@@ -2294,6 +2470,11 @@ async function openSdLog() {
   } catch (e) {
     $('#log-body').textContent = '读取日志失败：' + e;
   }
+}
+
+function comfyReady() {
+  const c = state.comfy || {};
+  return !!(c.up && c.ready);
 }
 
 function sdReady() {
@@ -3563,6 +3744,9 @@ window.ChengXin = {
   openDraw,
   openQwen,
   generateImage,
+  send,
+  isQwenThread,
+  comfyReady,
   openSettings,
   openTts,
   newChat,
