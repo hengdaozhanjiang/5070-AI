@@ -29,6 +29,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -168,6 +169,30 @@ SD_STYLE_GUARD = ((CFG.get("sd") or {}).get("style_guard")
 SD_MODEL_INFO = ((CFG.get("sd") or {}).get("checkpoints") or {})
 
 
+def bat_port(path: str) -> int | None:
+    """Extract the --port value a .bat passes to llama-server.
+
+    The port is declared twice - in config.json and inside the .bat - and a
+    mismatch is invisible: the server starts fine on its own port, while the hub
+    polls the other one and eventually reports "process exited", which sends
+    people looking in the wrong place. Reading the file is cheap, so check it.
+    Returns None when the file cannot be read or has no --port.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    # `--port 8082` or `--port=8082`, in any argument position
+    m = re.search(r"--port[=\s]+(\d{2,5})", text)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
 def config_problems() -> list[str]:
     """Catch the mistakes that would otherwise surface as a confusing failure.
 
@@ -189,8 +214,28 @@ def config_problems() -> list[str]:
             out.append(f"{cfg['label']} 没配置启动脚本（bat）")
         elif not os.path.exists(cfg["bat"]):
             out.append(f"{cfg['label']} 的启动脚本不存在：{cfg['bat']}")
+        else:
+            # the .bat may bind a different port than config.json claims
+            declared = bat_port(cfg["bat"])
+            if declared is None:
+                out.append(f"{cfg['label']} 的启动脚本里找不到 --port，"
+                           f"启动后 hub 将无法确认它在监听哪个端口")
+            elif declared != port:
+                out.append(f"{cfg['label']} 端口不一致：config.json 写的是 {port}，"
+                           f"但 {os.path.basename(cfg['bat'])} 里是 --port {declared}。"
+                           f"这会导致启动后一直显示「加载中」，请改成同一个值")
         if not cfg["model"]:
             out.append(f"{cfg['label']} 没配置模型文件（model）")
+        elif not os.path.exists(cfg["model"]):
+            out.append(f"{cfg['label']} 的模型文件不存在：{cfg['model']}")
+        # a downloadable model whose local name differs from the download target
+        # will "finish downloading" and still fail to start
+        hf_file = cfg.get("hf_file") or ""
+        if hf_file and cfg["model"] and \
+                os.path.basename(cfg["model"]) != os.path.basename(hf_file):
+            out.append(f"{cfg['label']} 的 model（{os.path.basename(cfg['model'])}）"
+                       f"和 hf_file（{os.path.basename(hf_file)}）不一致，"
+                       f"下载完成后仍然找不到文件")
     for name, cfg in (("SD", SD), ("语音合成", TTS)):
         if not cfg.get("enabled"):
             continue
@@ -200,6 +245,8 @@ def config_problems() -> list[str]:
         seen[port] = name
         if not cfg.get("dir"):
             out.append(f"{name} 没配置安装目录（dir），功能不可用")
+        elif not os.path.isdir(cfg["dir"]):
+            out.append(f"{name} 的目录不存在：{cfg['dir']}")
     if PORT in seen:
         out.append(f"端口 {PORT} 被 hub 自己和 {seen[PORT]} 同时使用")
     return out
@@ -500,27 +547,73 @@ def spawn_timeout(cfg: dict) -> float:
     return 180.0 if cfg["id"] == "35b" else 120.0
 
 
+# A launcher that is still not listening after this long is not loading any more.
+CRASH_CHECK_AFTER = 12.0
+
+# Other ports worth probing when ours stays closed: if one of them answers, the
+# .bat and config.json simply disagree, which needs a different message.
+def _other_ports(cfg: dict) -> list[int]:
+    found = []
+    declared = bat_port(cfg["bat"]) if cfg.get("bat") else None
+    if declared and declared != cfg["port"]:
+        found.append(declared)
+    for other in MODELS.values():
+        if other["id"] != cfg["id"] and other["port"] != cfg["port"]:
+            found.append(other["port"])
+    for other in (SD, TTS):
+        if other.get("enabled") and other.get("port") not in (None, cfg["port"]):
+            found.append(other["port"])
+    return found
+
+
 def check_spawn_health(cfg: dict) -> dict | None:
     """Report a stuck or crashed load instead of showing "加载中" forever.
 
     Returns None while it is still plausibly loading, or a dict describing the
     failure. Called from probe() so every poll benefits.
+
+    Three outcomes, because each needs a different fix:
+      * another port answers -> config.json and the .bat disagree on --port
+      * process is gone      -> it crashed; read the log
+      * alive, still nothing -> out of VRAM, or a model too large for the card
     """
     mid = cfg["id"]
     started = _spawning.get(mid)
     if not started:
         return None
     if port_open(cfg["port"]):
-        return None                      # it bound the port, give it time to answer
+        return None                      # bound the port, give it time to answer
+
     elapsed = time.time() - started
+
+    # 1) our port is closed but a sibling port answers: a typo, not a crash.
+    #    Checked early because waiting out the timeout explains nothing.
+    if elapsed >= 6.0:
+        for other_port in _other_ports(cfg):
+            if port_open(other_port):
+                _spawning.pop(mid, None)
+                _health_cache.pop(mid, None)
+                return {
+                    "error": f"端口不一致：模型似乎监听在 {other_port}，但 "
+                             f"config.json 配的是 {cfg['port']}。"
+                             f"把 .bat 里的 --port 和 config.json 的 port "
+                             f"改成同一个值",
+                    "hint": "config",
+                }
+
+    # 2) nothing has bound after the grace period: the launcher died
+    if elapsed >= CRASH_CHECK_AFTER and not server_pids(cfg["port"]):
+        _spawning.pop(mid, None)
+        _health_cache.pop(mid, None)
+        return {"error": "启动失败：进程已退出，看日志确认原因",
+                "hint": "log"}
+
+    # 3) still there but never ready - usually VRAM
     if elapsed < spawn_timeout(cfg):
         return None
-
-    # too long: see whether the process is even alive
-    alive = bool(server_pids(cfg["port"]))
     _spawning.pop(mid, None)
     _health_cache.pop(mid, None)
-    if not alive:
+    if not server_pids(cfg["port"]):
         return {"error": "启动失败：进程已退出，看日志确认原因",
                 "hint": "log"}
     return {"error": f"加载超时（{int(elapsed)} 秒仍未就绪），可能是显存不足",

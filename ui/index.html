@@ -20,6 +20,11 @@
     </div>
 
     <div class="side-scroll">
+      <!-- Configuration problems surface here, above everything else: a broken
+           config is invisible otherwise and only shows up as a vague failure
+           after the user clicks 启动. -->
+      <div id="config-warn" class="config-warn" hidden></div>
+
       <!-- Everything GPU-related collapses into one group: three services and
            two models take a lot of height, and most of the time you only need
            to see which one is running. -->

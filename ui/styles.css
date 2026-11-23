@@ -168,6 +168,36 @@ button { cursor: pointer; border: 0; background: none; }
   white-space: nowrap;
 }
 
+/* configuration problems banner, sits above everything in the sidebar */
+.config-warn {
+  margin: 12px 0 4px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--line));
+  border-left: 3px solid var(--red);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--red) 8%, var(--panel));
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.config-warn[hidden] { display: none; }
+.config-warn .cw-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+}
+.config-warn .cw-head b { color: var(--red); font-size: 12px; }
+.config-warn .cw-head .hint { color: var(--text-faint); font-size: 10.5px; }
+.config-warn ul {
+  margin: 0;
+  padding-left: 15px;
+  list-style: disc;
+}
+.config-warn li { margin: 3px 0; word-break: break-word; }
+.config-warn li::marker { color: var(--red); }
+
 /* collapsible group that holds every GPU service */
 .group-head {
   display: flex;

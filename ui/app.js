@@ -218,6 +218,30 @@ async function startDownload(id, host) {
   setTimeout(() => { if (!document.body.contains(host)) stop(); }, 1000);
 }
 
+/* Configuration problems, shown above the sidebar.
+ *
+ * Without this a broken config is silent: the cards just say "未启动", and the
+ * user only finds out after clicking 启动 and reading a terse error. Surfacing
+ * it on load turns a mystery into a checklist.
+ */
+function renderConfigWarnings() {
+  const box = $('#config-warn');
+  if (!box) return;
+  const list = state.configProblems || [];
+  if (!list.length) {
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="cw-head">
+      <b>配置有 ${list.length} 处问题</b>
+      <span class="hint">修好后再点启动</span>
+    </div>
+    <ul>${list.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`;
+}
+
 function renderModelList() {
   const box = $('#model-list');
   box.innerHTML = '';
@@ -1792,6 +1816,8 @@ async function pollState(force = false) {
     const hub = data.hub || {};
     $('#hub-dot').classList.toggle('off', !state.models.length);
     $('#hub-text').textContent = `hub :${hub.port || '—'}`;
+    state.configProblems = hub.problems || [];
+    renderConfigWarnings();
     if (!state.chat) {
       // default to 9B rather than whatever happens to be loaded
       const pick = state.models.find(m => m.id === PREFERRED_MODEL)
