@@ -1,0 +1,6 @@
+# GitHub 会在仓库页右上角显示一个 Sponsor 按钮。
+# 微信和支付宝不在 GitHub 原生支持的平台列表里（官方只支持 github /
+# patreon / open_collective / ko_fi / liberapay / buy_me_a_coffee /
+# thanks_dev / polar / issuehunt / tidelift / community_bridge），
+# 所以这里用 custom 指向仓库内的打赏说明页。
+custom: ["https://github.com/hengdaozhanjiang/5070-AI/blob/main/DONATE.md"]
