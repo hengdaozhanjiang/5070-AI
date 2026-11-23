@@ -17,7 +17,10 @@ outputs/
 data/voices/
 
 # Browser profile for the Edge app window (hundreds of MB).
+# Test runs also drop throwaway profiles here (data/fXX with --user-data-dir);
+# they are entire Edge user-data trees and must never be committed.
 data/edge-profile/
+data/f*/
 
 # Scratch scripts and captured output from debugging sessions. These are
 # throwaway by nature; keeping them out stops them from being committed by

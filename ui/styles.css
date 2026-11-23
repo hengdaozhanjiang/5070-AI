@@ -1403,3 +1403,39 @@ html[data-theme="light"] .code-card { background: #f7f9fd; }
   .app { grid-template-columns: 1fr; }
   .sidebar { display: none; }
 }
+
+/* --- custom size inputs in the drawing panel ----------------------------- */
+/* The presets cover the common cases; this row appears only when the user
+   picks 「自定义」, so the panel stays short for everyone else. */
+.size-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.size-custom input {
+  width: 66px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.size-custom .times {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.size-custom .mini-btn {
+  padding: 1px 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Warn when the numbers are outside what the backend accepts, or when the
+   pair is likely to produce a bad picture (too large for 12 GB, odd sizes). */
+.size-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  min-height: 15px;
+  padding-left: 74px;
+  margin: -2px 0 2px;
+}
+.size-note.bad { color: #ff8a5c; }
+.size-note.warn { color: #e8c15a; }

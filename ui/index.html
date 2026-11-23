@@ -311,15 +311,25 @@
         </div>
         <label class="row">
           <span>尺寸</span>
-          <select id="draw-size" class="sel">
+          <select id="draw-size" class="sel" title="选预设，或选「自定义」自己填宽高">
             <option value="768x1024">竖版 768×1024</option>
             <option value="1024x768">横版 1024×768</option>
             <option value="832x832" selected>方图 832×832</option>
             <option value="512x512">小图 512×512</option>
+            <option value="custom">自定义…</option>
           </select>
+          <span class="size-custom" id="draw-size-custom" hidden>
+            <input type="number" id="draw-w" value="832" min="256" max="2048" step="8"
+                   title="宽（256-2048，8 的倍数）">
+            <span class="times">×</span>
+            <input type="number" id="draw-h" value="832" min="256" max="2048" step="8"
+                   title="高（256-2048，8 的倍数）">
+            <button type="button" class="mini-btn" id="draw-swap" title="交换宽高">⇄</button>
+          </span>
           <span style="flex:0 0 auto;color:var(--text-dim);font-size:12.5px">步数</span>
           <input type="number" id="draw-steps" value="28" min="8" max="60" style="width:70px">
         </label>
+        <div class="size-note" id="draw-size-note"></div>
         <label class="row">
           <span>CFG</span>
           <input type="range" id="draw-cfg" min="1" max="15" step="0.5" value="7">

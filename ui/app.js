@@ -28,6 +28,7 @@ const state = {
   attached: [],         // [{ name, dataUrl, mime }]
   comfy: null,          // Qwen-Image / ComfyUI status from /api/state
   drawBackend: 'sd',    // which service the drawing panel currently drives
+  drawFamily: 'sd15',   // sd15 / sdxl, drives the size hints in the panel
 };
 
 function loadSettings() {
@@ -51,6 +52,8 @@ function loadSettings() {
     drawPrompt: '',
     drawNegative: 'lowres, bad anatomy, text, watermark, blurry',
     drawSize: '832x832',
+    drawWidth: 832,
+    drawHeight: 832,
     drawSteps: 26,
     drawCfg: 7,
     drawSeed: -1,
@@ -1201,7 +1204,7 @@ async function drawInChat(chat, ask, originalText) {
   const r = await generateImage({
     prompt: ask.prompt,
     negative: $('#draw-neg') ? $('#draw-neg').value : '',
-    size: $('#draw-size') ? $('#draw-size').value : '832x832',
+    size: currentSize(),
     steps: $('#draw-steps') ? Number($('#draw-steps').value) || 28 : 28,
     cfg: $('#draw-cfg') ? Number($('#draw-cfg').value) || 7 : 7,
     seed: -1,
@@ -2519,6 +2522,7 @@ function renderDrawCheckpoints() {
 /* Match the size / cfg controls to whichever checkpoint family is loaded. */
 function applyFamilyDefaults(hit) {
   const fam = (hit && hit.family) || (state.sd && state.sd.family) || 'sd15';
+  state.drawFamily = fam;
   const d = (hit && hit.defaults) || (state.sd && state.sd.defaults)
     || (fam === 'sdxl'
       ? { width: 1024, height: 1024, cfg: 5 }
@@ -2542,6 +2546,146 @@ function applyFamilyDefaults(hit) {
   saveDrawDraft();
 }
 
+/* Read the size the panel is currently asking for.
+
+   Presets keep the old single-value shape; 「自定义」 reads the two number
+   inputs. Always returns something the backend accepts: multiples of 8 within
+   the range it clamps to, because odd numbers make SD produce smeared edges. */
+function currentSize() {
+  const sel = $('#draw-size');
+  if (!sel) return '832x832';
+  if (sel.value !== 'custom') return sel.value || '832x832';
+  const w = snapSize(Number(($('#draw-w') || {}).value));
+  const h = snapSize(Number(($('#draw-h') || {}).value));
+  return `${w}x${h}`;
+}
+
+/* Round to a multiple of 8 and clamp to what the services accept. */
+function snapSize(n) {
+  if (!isFinite(n) || n <= 0) return 1024;
+  // Each backend clamps on its own; matching those numbers here keeps the
+  // picture the size the user asked for instead of silently shrinking it.
+  const max = maxSizeForBackend();
+  return Math.max(256, Math.min(max, Math.round(n / 8) * 8));
+}
+
+/* The largest edge the current backend accepts. SD clamps at 1536, the
+   ComfyUI/Qwen path at 2048 - asking for more would be silently reduced. */
+function maxSizeForBackend() {
+  return (comfyReady() || state.drawBackend === 'comfy') ? 2048 : 1536;
+}
+
+/* Show or hide the two number inputs and explain any problem with the values. */
+function syncSizeUi(fam) {
+  const sel = $('#draw-size');
+  const box = $('#draw-size-custom');
+  const note = $('#draw-size-note');
+  if (!sel || !box) return;
+  // The input handlers cannot pass the family, so remember the last one that
+  // applied. Without this the SDXL hint never fires while typing.
+  if (fam) state.drawFamily = fam;
+  const family = state.drawFamily || (state.sd && state.sd.family) || 'sd15';
+  const custom = sel.value === 'custom';
+  box.hidden = !custom;
+  if (!note) return;
+
+  if (!custom) {
+    note.textContent = '';
+    note.className = 'size-note';
+    return;
+  }
+
+  const w = Number(($('#draw-w') || {}).value);
+  const h = Number(($('#draw-h') || {}).value);
+  const famName = family;
+  const msgs = [];
+  let level = '';
+
+  if (!isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) {
+    msgs.push('宽高要填正整数');
+    level = 'bad';
+  } else {
+    if (w % 8 || h % 8) {
+      msgs.push('会自动对齐到 8 的倍数');
+      level = 'warn';
+    }
+    const maxEdge = maxSizeForBackend();
+    if (w < 256 || h < 256 || w > maxEdge || h > maxEdge) {
+      msgs.push(`超出 256-${maxEdge}，会被夹到边界`);
+      level = 'bad';
+    }
+    const px = w * h;
+    // a rough ceiling for 12 GB: this is where SD starts swapping to system RAM
+    if (px > 1536 * 1536) {
+      msgs.push('这个尺寸很大，12G 显存可能要分块，会变慢');
+      level = level || 'warn';
+    }
+    if (famName === 'sd15' && Math.max(w, h) > 1024) {
+      msgs.push('SD1.5 超过 1024 容易出现重复主体');
+      level = level || 'warn';
+    }
+    if (famName === 'sdxl' && Math.max(w, h) < 768) {
+      msgs.push('SDXL 低于 768 会糊');
+      level = level || 'warn';
+    }
+    if (!msgs.length) {
+      msgs.push(`将生成 ${snapSize(w)}×${snapSize(h)}`);
+    }
+  }
+  note.textContent = msgs.join('；');
+  note.className = 'size-note' + (level ? ' ' + level : '');
+}
+
+/* Fill the number inputs from a preset value so switching away from 自定义
+   keeps whatever was last on screen instead of jumping somewhere unexpected. */
+function seedSizeInputs(value) {
+  if (!value || value === 'custom') return;
+  const [w, h] = String(value).split('x').map(Number);
+  const iw = $('#draw-w');
+  const ih = $('#draw-h');
+  if (iw && isFinite(w)) iw.value = w;
+  if (ih && isFinite(h)) ih.value = h;
+}
+
+function bindSizeInputs() {
+  const sel = $('#draw-size');
+  if (!sel || sel._sizeBound) return;
+  sel._sizeBound = true;
+
+  sel.addEventListener('change', () => {
+    if (sel.value === 'custom') {
+      // start from whatever preset was showing, so the user edits a sane value
+      const prev = [...sel.options].find(o => o.value !== 'custom' && o.defaultSelected);
+      seedSizeInputs(sel.dataset.prev || (prev && prev.value) || '832x832');
+    } else {
+      seedSizeInputs(sel.value);
+    }
+    sel.dataset.prev = sel.value === 'custom'
+      ? (sel.dataset.prev || '832x832') : sel.value;
+    syncSizeUi();
+    saveDrawDraft();
+  });
+
+  ['#draw-w', '#draw-h'].forEach(id => {
+    const el = $(id);
+    if (el) el.addEventListener('input', () => { syncSizeUi(); saveDrawDraft(); });
+  });
+
+  const swap = $('#draw-swap');
+  if (swap) {
+    swap.addEventListener('click', () => {
+      const iw = $('#draw-w');
+      const ih = $('#draw-h');
+      if (!iw || !ih) return;
+      const t = iw.value;
+      iw.value = ih.value;
+      ih.value = t;
+      syncSizeUi();
+      saveDrawDraft();
+    });
+  }
+}
+
 function rebuildSizeOptions(fam, defaults) {
   const sel = $('#draw-size');
   if (!sel) return;
@@ -2557,11 +2701,16 @@ function rebuildSizeOptions(fam, defaults) {
        ['1024x768', '横版 1024×768'],
        ['512x512', '小图 512×512'],
        ['640x896', '竖版 640×896']];
+  // 「自定义」stays available at the end, so a user who typed their own numbers
+  // does not lose that choice just because the model family changed
   sel.innerHTML = base.map(([v, label], i) =>
-    `<option value="${v}"${i === 0 ? ' selected' : ''}>${label}</option>`).join('');
+    `<option value="${v}"${i === 0 ? ' selected' : ''}>${label}</option>`).join('')
+    + '<option value="custom">自定义…</option>';
   // keep the user's choice if it still exists in the new list
   if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
   else sel.value = base[0][0];
+  seedSizeInputs(sel.value);
+  syncSizeUi(fam);
 }
 
 async function switchDrawModel(name) {
@@ -2607,13 +2756,21 @@ function restoreDrawDraft() {
   const s = state.settings || {};
   const set = (sel, val) => { const el = $(sel); if (el != null && val != null) el.value = val; };
   set('#draw-neg', s.drawNegative);
+  // a saved size means the user chose it deliberately; the caller uses this
+  // to decide whether the family defaults should override it
+  const hadSize = s.drawSize != null;
   set('#draw-size', s.drawSize);
+  set('#draw-w', s.drawWidth);
+  set('#draw-h', s.drawHeight);
   set('#draw-steps', s.drawSteps);
   set('#draw-cfg', s.drawCfg);
   set('#draw-seed', s.drawSeed);
   set('#draw-prompt', s.drawPrompt);
   const cfgVal = $('#draw-cfg-val');
   if (cfgVal) cfgVal.textContent = Number(s.drawCfg || 7).toFixed(1);
+  // make the custom row visible again if that is what was saved
+  syncSizeUi();
+  return hadSize;
 }
 
 /* Remember whatever is in the drawing fields, so it survives a close/restart. */
@@ -2624,7 +2781,12 @@ function saveDrawDraft(markSaved) {
   const neg = get('#draw-neg');
   if (neg != null) state.settings.drawNegative = neg;
   const size = get('#draw-size');
+  // 'custom' alone loses the numbers, so remember those separately
   if (size != null) state.settings.drawSize = size;
+  const cw = get('#draw-w');
+  const ch = get('#draw-h');
+  if (cw != null) state.settings.drawWidth = Number(cw) || 832;
+  if (ch != null) state.settings.drawHeight = Number(ch) || 832;
   const steps = get('#draw-steps');
   if (steps != null) state.settings.drawSteps = Number(steps) || 26;
   const cfg = get('#draw-cfg');
@@ -2681,6 +2843,14 @@ function openQwen(prefill) {
   }
   const cp = $('#draw-ckpts');
   if (cp) cp.hidden = true;
+  bindSizeInputs();
+  // Qwen is native at 1024 but the field is editable: larger tiles cost time,
+  // smaller ones lose detail
+  const iw = $('#draw-w');
+  const ih = $('#draw-h');
+  if (iw) iw.value = 1024;
+  if (ih) ih.value = 1024;
+  syncSizeUi('sdxl');
   $('#draw-status').textContent = '';
   modal.classList.add('open');
   setTimeout(() => $('#draw-prompt').focus(), 120);
@@ -2699,16 +2869,22 @@ function openDraw(prefill) {
   if (cp) cp.hidden = false;
   renderControlnetModels();
   if (state.cnImage) showControlPreview(state.cnImage);
-  // size/cfg follow whichever checkpoint is loaded
-  const cur = ((state.sd && state.sd.checkpoints) || []).find(c => sameCheckpoint(c.name, sdCurrentName()));
-  applyFamilyDefaults(cur || null);
   const modal = $('#draw-modal');
-  if (prefill != null) {
-    $('#draw-prompt').value = prefill;
-  } else {
-    restoreDrawDraft();
+  // Restore the draft FIRST: applyFamilyDefaults() ends with saveDrawDraft(),
+  // so running it afterwards would write the family defaults back over the
+  // user's own numbers and quietly lose their custom size.
+  const hadDraft = prefill == null && restoreDrawDraft();
+  // size/cfg follow whichever checkpoint is loaded, but only when there was
+  // nothing to restore - otherwise the saved values win
+  if (!hadDraft) {
+    const cur = ((state.sd && state.sd.checkpoints) || []).find(
+      c => sameCheckpoint(c.name, sdCurrentName()));
+    applyFamilyDefaults(cur || null);
   }
+  if (prefill != null) $('#draw-prompt').value = prefill;
   renderDrawCheckpoints();
+  bindSizeInputs();
+  syncSizeUi();
   showDrawSavedAt();
   $('#draw-status').textContent = sdReady() ? '' : 'SD 未启动，先点侧栏的“启动”';
   modal.classList.add('open');
@@ -3520,11 +3696,11 @@ function bind() {
       return;
     }
     try {
-      const [w, h] = $('#draw-size').value.split('x').map(Number);
+      const [w, h] = currentSize().split('x').map(Number);
       const r = await generateImage({
         prompt: $('#draw-prompt').value,
         negative: $('#draw-neg').value,
-        size: $('#draw-size').value,
+        size: currentSize(),
         steps: Number($('#draw-steps').value) || 28,
         cfg: Number($('#draw-cfg').value) || 7,
         seed: Number($('#draw-seed').value),
@@ -3741,6 +3917,9 @@ window.ChengXin = {
   openDraw,
   openQwen,
   generateImage,
+  currentSize,
+  snapSize,
+  syncSizeUi,
   send,
   isQwenThread,
   comfyReady,

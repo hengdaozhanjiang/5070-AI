@@ -236,6 +236,11 @@ def build_workflow(prompt: str, negative: str = "", seed: int = -1,
         seed = int(time.time() * 1000) % (2 ** 32)
     used_seed = seed
 
+    # The latent is half the target size, so an odd value would round and the
+    # picture would not match what was asked for. Snap to a multiple of 8.
+    width = max(256, min(2048, (int(width) // 8) * 8))
+    height = max(256, min(2048, (int(height) // 8) * 8))
+
     workflow = {
         "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": QWEN_UNET}},
         "2": {"class_type": "CLIPLoader",
@@ -244,10 +249,18 @@ def build_workflow(prompt: str, negative: str = "", seed: int = -1,
         "4": {"class_type": "TextEncodeQwenImage21",
               "inputs": {"clip": ["2", 0], "prompt": prompt,
                          "negative_prompt": negative, "resolution": max(width, height),
-                         "images": None, "vae": ["3", 0]}},
+                         "images": None}},
+        # The encoder only emits a square latent at `resolution`, so the aspect
+        # ratio would be lost. Reshape it to half the target size: Qwen's VAE
+        # decodes at 2x, so a latent of w/2 x h/2 produces exactly w x h.
+        # Measured: 1152x896 / 1024x1024 / 896x1152 all land exactly.
+        "5": {"class_type": "LatentUpscale",
+              "inputs": {"samples": ["4", 2], "upscale_method": "nearest-exact",
+                         "width": width // 2, "height": height // 2,
+                         "crop": "disabled"}},
         "6": {"class_type": "KSampler",
               "inputs": {"model": ["1", 0], "positive": ["4", 0],
-                         "negative": ["4", 1], "latent_image": ["4", 2],
+                         "negative": ["4", 1], "latent_image": ["5", 0],
                          "seed": seed, "steps": steps, "cfg": cfg,
                          "sampler_name": "euler", "scheduler": "simple",
                          "denoise": 1.0}},

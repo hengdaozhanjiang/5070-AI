@@ -54,7 +54,7 @@ PORT = 8090
 # Single source of truth for the version. It shows up in the HTTP Server header,
 # in /api/state, and in the sidebar footer, so it is defined once here.
 APP_NAME = "5070-AI"
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 APP_TITLE = "橙芯绘话"          # window title, also how we find the window
 
 # --------------------------------------------------------------------------
