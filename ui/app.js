@@ -1249,19 +1249,10 @@ async function qwenInChat(chat, text) {
   prog.className = 'tts-prog';
   $('.bubble', el).appendChild(prog);
 
-  // ComfyUI reports no percentage, so feed progressBar a synthetic job: it
-  // renders the same bar the SD path uses. A cold model loads for about a
-  // minute, so the estimate leans slow rather than finishing early.
-  const t0 = Date.now();
-  const ticker = setInterval(() => {
-    const secs = (Date.now() - t0) / 1000;
-    progressBar(prog, {
-      state: 'running',
-      progress: Math.min(0.92, secs / 25),
-      label: '正在画',
-      started: Math.round(t0 / 1000),
-    }, '正在画');
-  }, 500);
+  // The hub publishes a "comfy" job in /api/progress, so the bar reads real
+  // state instead of faking one. ComfyUI itself reports no percentage for this
+  // workflow, so the hub derives it from elapsed time.
+  const stopTrack = trackJob('comfy', prog, '正在画');
 
   const r = await generateImage({
     prompt: text,
@@ -1271,8 +1262,7 @@ async function qwenInChat(chat, text) {
     cfg: 1,
     seed: -1,
   });
-  clearInterval(ticker);
-  prog.innerHTML = '';
+  stopTrack();
 
   if (!r) {
     appendSdError(el, '画不出来。Qwen 图像可能没启动，点下面按钮启动。');
@@ -2915,7 +2905,12 @@ async function generateImage(opts = {}) {
 
   // Qwen-Image goes through ComfyUI; everything else through the SD WebUI.
   // They are separate services, so the request shape differs.
-  if (state.drawBackend === 'comfy') {
+  // Which service renders this? drawBackend only records the last panel that
+  // was opened, so a new conversation (or typing straight into the box) would
+  // use a stale value. Decide from what is actually running instead - the two
+  // never coexist, so the running one is the only one that can answer.
+  const useQwen = comfyReady() || (!sdReady() && state.drawBackend === 'comfy');
+  if (useQwen) {
     if (!((state.comfy || {}).ready)) {
       toast('Qwen 图像没就绪', 'err');
       return null;
@@ -3512,7 +3507,9 @@ function bind() {
     if (cancelBtn) cancelBtn.hidden = false;
     // show a live bar driven by SD's own progress endpoint
     const barHost = $('#draw-progress');
-    const stopTrack = trackJob('sd', barHost, '生成中', () => {
+    // whichever backend drives this panel publishes its own job name
+    const jobKind = state.drawBackend === 'comfy' ? 'comfy' : 'sd';
+    const stopTrack = trackJob(jobKind, barHost, '生成中', () => {
       if (barHost) barHost.innerHTML = '';
     });
     const cn = controlnetPayload();

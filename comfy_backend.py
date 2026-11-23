@@ -39,6 +39,9 @@ QWEN_CFG = 1.0
 
 _state = {"up": False, "loading": False, "pid": 0, "error": None}
 
+# whether the weights are already in VRAM; reset when the service stops
+_warm = [False]
+
 
 def base() -> str:
     return f"http://127.0.0.1:{COMFY_PORT}"
@@ -106,6 +109,7 @@ def start(log_path: str | None = None) -> dict:
 
     _state["pid"] = proc.pid
     _state["loading"] = True
+    _warm[0] = False
     return {"ok": True, "message": f"ComfyUI 开始启动（PID {proc.pid}），首次约 10-20 秒"}
 
 
@@ -160,6 +164,7 @@ def stop() -> dict:
     if _kill_port(COMFY_PORT):
         stopped = True
     _state.update({"up": False, "loading": False, "pid": 0})
+    _warm[0] = False
     return {"ok": True,
             "message": "ComfyUI 已停止" if stopped else "ComfyUI 本来就没在运行"}
 
@@ -196,6 +201,24 @@ def probe() -> dict:
                                "bytes": os.path.getsize(path) if ok else 0})
     info["ready"] = all(m["ok"] for m in info["models"])
     return info
+
+
+def warm() -> bool:
+    """True when ComfyUI already holds the model in VRAM.
+
+    Used to pick between the "loading 10 GB" progress curve and the fast one.
+    The render happens on model 1's node; ComfyUI's stats do not expose what is
+    loaded, so track it locally: a successful render means the next one is warm
+    until the service restarts.
+    """
+    if not is_up():
+        _warm[0] = False
+        return False
+    return _warm[0]
+
+
+def mark_warm(value: bool = True) -> None:
+    _warm[0] = bool(value)
 
 
 def build_workflow(prompt: str, negative: str = "", seed: int = -1,
@@ -284,6 +307,7 @@ def generate(prompt: str, negative: str = "", seed: int = -1,
                 with _open(req, 120) as r:
                     raw = r.read()
                 data_url = "data:image/png;base64," + base64.b64encode(raw).decode()
+                _warm[0] = True
                 return {"ok": True, "images": [data_url],
                         "seed": used_seed, "elapsed": round(time.time() - started, 1),
                         "prompt": prompt}

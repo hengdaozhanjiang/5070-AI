@@ -1718,10 +1718,28 @@ def comfy_generate(payload: dict) -> dict:
 
     job_begin("comfy", label=prompt[:40])
 
+    # ComfyUI reports no percentage for this workflow, so the bar is an
+    # estimate. The first render after a start also loads ~10 GB of weights and
+    # takes a minute or two; later ones settle in about 2 s. Using one curve for
+    # both made the bar sit at 95% for over a minute, which reads as a hang.
+    cold = not comfy_backend.warm()
+
     def progress(elapsed: float) -> None:
-        # this workflow reports no percentage, so estimate from elapsed time:
-        # a warm model settles in about 2 s, a cold one takes a minute or two
-        job_set("comfy", progress=min(0.95, elapsed / 25.0), label="正在生成")
+        if cold:
+            # long load up front, then a quick finish: reach 90% over 90 s and
+            # creep the rest, so the bar never freezes
+            share = min(0.9, elapsed / 90.0)
+            rest = min(0.09, max(0.0, (elapsed - 90.0) / 600.0))
+            pct = share + rest
+            label = "正在加载模型" if elapsed < 60 else "正在生成"
+        else:
+            # a warm render measures 14-20 s here, so spread the bar over 20 s
+            # and let the tail creep instead of parking at 95%
+            pct = min(0.9, elapsed / 20.0)
+            if elapsed > 20.0:
+                pct = min(0.98, 0.9 + (elapsed - 20.0) / 120.0)
+            label = "正在生成"
+        job_set("comfy", progress=pct, label=label)
 
     # Same shape as sd_generate: the render runs on a worker and this thread
     # only waits for it. Doing the whole thing inline blocks the handler while
