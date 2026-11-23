@@ -2489,6 +2489,12 @@ function openQwen(prefill) {
     toast('Qwen 图像没在运行，先点侧栏的“启动”', 'err');
     return;
   }
+  if (!c.ready) {
+    // running but missing one of the three files Qwen-Image needs
+    const missing = (c.models || []).filter(m => !m.ok).map(m => m.role);
+    toast('Qwen 图像缺模型：' + (missing.join('、') || '未知'), 'err');
+    return;
+  }
   // Qwen-Image is native at 1024; leave the size controls showing that
   applyFamilyDefaults({ family: 'sdxl', defaults: { width: 1024, height: 1024,
                                                    steps: 8, cfg: 1 } });
@@ -2502,7 +2508,7 @@ function openQwen(prefill) {
     const block = cn.closest('.cn-block');
     if (block) block.hidden = true;
   }
-  const cp = $('#draw-checkpoints');
+  const cp = $('#draw-ckpts');
   if (cp) cp.hidden = true;
   $('#draw-status').textContent = '';
   modal.classList.add('open');
@@ -2518,7 +2524,7 @@ function openDraw(prefill) {
     const block = cn.closest('.cn-block');
     if (block) block.hidden = false;
   }
-  const cp = $('#draw-checkpoints');
+  const cp = $('#draw-ckpts');
   if (cp) cp.hidden = false;
   renderControlnetModels();
   if (state.cnImage) showControlPreview(state.cnImage);

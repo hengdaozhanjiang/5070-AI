@@ -498,6 +498,16 @@ def _free_gpu(keep_id: str = "", need_mib: int = 0,
         freed.append(TTS["label"])
         _tts_spawning = 0.0
         ports.append(TTS["port"])
+    # ComfyUI is a GPU user too, and it is not one of the services above:
+    # leaving it running is exactly the "two services on one card" case.
+    if keep_id != "comfy":
+        try:
+            if comfy_backend.is_up():
+                comfy_backend.stop()
+                freed.append("Qwen 图像")
+                ports.append(comfy_backend.COMFY_PORT)
+        except Exception:  # noqa: BLE001
+            pass
 
     if not freed:
         return {"ok": True, "freed": [], "message": ""}
@@ -2213,6 +2223,7 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file_log(os.path.join(LOG_DIR, "comfy.log"), label="comfy")
         elif path == "/api/progress":
             self._json({"sd": job_snapshot("sd"), "tts": job_snapshot("tts"),
+                        "comfy": job_snapshot("comfy"),
                         "download": job_snapshot("download")})
         elif path == "/api/chats":
             self._json(read_chats())

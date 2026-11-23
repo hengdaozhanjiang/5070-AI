@@ -9,8 +9,11 @@ reports the result, and /view serves the finished picture.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
+import socket
+import subprocess
 import threading
 import time
 import urllib.error
@@ -41,9 +44,19 @@ def base() -> str:
     return f"http://127.0.0.1:{COMFY_PORT}"
 
 
+# Everything here is loopback. urllib honours HTTPS_PROXY / HTTP_PROXY from the
+# environment, and with a proxy set the local requests get forwarded outward and
+# the connection is dropped - so build an opener that never proxies.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _open(req, timeout: int):
+    return _OPENER.open(req, timeout=timeout)
+
+
 def _get(path: str, timeout: int = 20):
     req = urllib.request.Request(base() + path, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _open(req, timeout) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
@@ -52,7 +65,7 @@ def _post(path: str, obj, timeout: int = 300):
     req = urllib.request.Request(base() + path, data=data,
                                  headers={"Content-Type": "application/json"},
                                  method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _open(req, timeout) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
@@ -96,16 +109,59 @@ def start(log_path: str | None = None) -> dict:
     return {"ok": True, "message": f"ComfyUI 开始启动（PID {proc.pid}），首次约 10-20 秒"}
 
 
+def _port_open(port: int) -> bool:
+    with socket.socket() as sock:
+        sock.settimeout(0.6)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _kill_port(port: int) -> bool:
+    """Kill whatever is listening on a port. True if something was stopped."""
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                            capture_output=True, text=True, timeout=20,
+                            creationflags=subprocess.CREATE_NO_WINDOW).stdout
+    except Exception:  # noqa: BLE001
+        return False
+    pids = set()
+    for line in out.splitlines():
+        if f":{port}" in line and "LISTENING" in line.upper():
+            parts = line.split()
+            if parts and parts[-1].isdigit():
+                pids.add(parts[-1])
+    killed = False
+    for pid in pids:
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", pid],
+                           capture_output=True, text=True, timeout=20,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+            killed = True
+        except Exception:  # noqa: BLE001
+            pass
+    return killed
+
+
 def stop() -> dict:
+    """Stop ComfyUI - whether this process started it or the user did.
+
+    Only tracking our own PID missed the case where ComfyUI was already up, so
+    the port is checked as well.
+    """
     pid = _state.get("pid")
-    killed = []
+    stopped = False
     if pid:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                       capture_output=True, text=True, timeout=20,
-                       creationflags=subprocess.CREATE_NO_WINDOW)
-        killed.append(pid)
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, text=True, timeout=20,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+            stopped = True
+        except Exception:  # noqa: BLE001
+            pass
+    if _kill_port(COMFY_PORT):
+        stopped = True
     _state.update({"up": False, "loading": False, "pid": 0})
-    return {"ok": True, "message": "ComfyUI 已停止"}
+    return {"ok": True,
+            "message": "ComfyUI 已停止" if stopped else "ComfyUI 本来就没在运行"}
 
 
 def probe() -> dict:
@@ -225,9 +281,8 @@ def generate(prompt: str, negative: str = "", seed: int = -1,
                        f"&subfolder={im.get('subfolder', '')}"
                        f"&type={im.get('type', 'output')}")
                 req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=120) as r:
+                with _open(req, 120) as r:
                     raw = r.read()
-                import base64
                 data_url = "data:image/png;base64," + base64.b64encode(raw).decode()
                 return {"ok": True, "images": [data_url],
                         "seed": used_seed, "elapsed": round(time.time() - started, 1),
