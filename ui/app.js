@@ -2788,6 +2788,9 @@ function restoreDrawDraft() {
 }
 
 /* Remember whatever is in the drawing fields, so it survives a close/restart. */
+/* Anything that changes the drawing settings writes them through, so the
+   panel reopens exactly as it was left. The explicit button only stamps a
+   timestamp and shows a toast - the values are already saved. */
 function saveDrawDraft(markSaved) {
   const get = (sel) => { const el = $(sel); return el ? el.value : null; };
   const prompt = get('#draw-prompt');
@@ -2837,18 +2840,29 @@ function openQwen(prefill) {
     return;
   }
   if (!c.ready) {
-    // running but missing one of the three files Qwen-Image needs
     const missing = (c.models || []).filter(m => !m.ok).map(m => m.role);
     toast('Qwen 图像缺模型：' + (missing.join('、') || '未知'), 'err');
     return;
   }
-  // Qwen-Image is native at 1024; leave the size controls showing that
-  applyFamilyDefaults({ family: 'sdxl', defaults: { width: 1024, height: 1024,
-                                                   steps: 8, cfg: 1 } });
+
+  // Restore first, decide second. restoreDrawDraft puts the saved size (custom
+  // or preset) back into the controls; only when there is nothing to restore do
+  // we fall back to Qwen's native 1024. Doing this in the other order meant the
+  // saved numbers were overwritten every time the panel opened.
+  const hadDraft = prefill == null && restoreDrawDraft();
+  if (!hadDraft) {
+    applyFamilyDefaults({ family: 'sdxl', defaults: { width: 1024, height: 1024,
+                                                     steps: 8, cfg: 1 } });
+    const iw = $('#draw-w');
+    const ih = $('#draw-h');
+    if (iw) iw.value = 1024;
+    if (ih) ih.value = 1024;
+  }
+
   const note = $('#draw-family-note');
   if (note) note.textContent = 'Qwen-Image 2.1 Turbo · 原生 1024×1024，8 步，CFG 1';
   if (prefill != null) $('#draw-prompt').value = prefill;
-  else restoreDrawDraft();
+
   // controlnet is an SD concept; hide it while Qwen drives
   const cn = $('#draw-cn-on');
   if (cn) {
@@ -2857,19 +2871,13 @@ function openQwen(prefill) {
   }
   const cp = $('#draw-ckpts');
   if (cp) cp.hidden = true;
+
   bindSizeInputs();
-  // Qwen is native at 1024 but the field is editable: larger tiles cost time,
-  // smaller ones lose detail
-  const iw = $('#draw-w');
-  const ih = $('#draw-h');
-  if (iw) iw.value = 1024;
-  if (ih) ih.value = 1024;
   syncSizeUi('sdxl');
   $('#draw-status').textContent = '';
   modal.classList.add('open');
   setTimeout(() => $('#draw-prompt').focus(), 120);
 }
-
 function openDraw(prefill) {
   state.drawBackend = 'sd';
   const title = $('#draw-title');
@@ -3829,7 +3837,9 @@ function bind() {
   // explicit save: also stamps the time so you can see it took effect
   $('#draw-save').onclick = () => {
     saveDrawDraft(true);
-    toast('提示词已保存', 'ok');
+    const w = $('#draw-w');
+    const size = currentSize();
+    toast(`已保存 · ${size}${w && w.dataset.touched === '1' ? '（自定义）' : ''}`, 'ok');
   };
 
   // clear the prompt fields (and forget the stored draft)

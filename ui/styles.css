@@ -1363,8 +1363,10 @@ html[data-theme="light"] .code-card { background: #f7f9fd; }
   -webkit-user-drag: none;
   image-rendering: auto;
 }
-/* at 1:1 and above, keep pixels crisp so detail is actually inspectable */
-.viewer img.crisp { image-rendering: pixelated; }
+/* Photos must be resampled smoothly. `pixelated` turns each source pixel into
+   a hard block, which looks like heavy noise on a portrait once you zoom past
+   100% - it belongs on sprite art, not on a render. */
+.viewer img.crisp { image-rendering: auto; }
 
 .viewer-zoom {
   min-width: 52px;

@@ -241,33 +241,41 @@ def build_workflow(prompt: str, negative: str = "", seed: int = -1,
     width = max(256, min(2048, (int(width) // 8) * 8))
     height = max(256, min(2048, (int(height) // 8) * 8))
 
+    # The graph follows ComfyUI's own Qwen-Image template: a plain
+    # EmptySD3LatentImage carries the requested width and height directly.
+    #
+    # An earlier version fed TextEncodeQwenImage21's latent into LatentUpscale
+    # because that encoder always emits a square. It produced the right pixel
+    # size (its VAE decodes at 2x) but the stretched latent made the picture
+    # look dirty - blocky texture, muddy detail. Building the latent at the
+    # right size from the start avoids the problem entirely and matches what
+    # the official workflow does.
     workflow = {
         "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": QWEN_UNET}},
         "2": {"class_type": "CLIPLoader",
               "inputs": {"clip_name": QWEN_CLIP, "type": "qwen_image"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": QWEN_VAE}},
-        "4": {"class_type": "TextEncodeQwenImage21",
-              "inputs": {"clip": ["2", 0], "prompt": prompt,
-                         "negative_prompt": negative, "resolution": max(width, height),
-                         "images": None}},
-        # The encoder only emits a square latent at `resolution`, so the aspect
-        # ratio would be lost. Reshape it to half the target size: Qwen's VAE
-        # decodes at 2x, so a latent of w/2 x h/2 produces exactly w x h.
-        # Measured: 1152x896 / 1024x1024 / 896x1152 all land exactly.
-        "5": {"class_type": "LatentUpscale",
-              "inputs": {"samples": ["4", 2], "upscale_method": "nearest-exact",
-                         "width": width // 2, "height": height // 2,
-                         "crop": "disabled"}},
-        "6": {"class_type": "KSampler",
-              "inputs": {"model": ["1", 0], "positive": ["4", 0],
-                         "negative": ["4", 1], "latent_image": ["5", 0],
+        "4": {"class_type": "CLIPTextEncode",
+              "inputs": {"clip": ["2", 0], "text": prompt}},
+        "5": {"class_type": "CLIPTextEncode",
+              "inputs": {"clip": ["2", 0], "text": negative}},
+        "6": {"class_type": "EmptySD3LatentImage",
+              "inputs": {"width": width, "height": height, "batch_size": 1}},
+        # Qwen-Image is an AuraFlow-style model: the scheduler needs its shift
+        # parameter or the result comes out washed and noisy. ComfyUI's own
+        # template uses 3.1; leaving it out was part of why pictures looked dirty.
+        "10": {"class_type": "ModelSamplingAuraFlow",
+               "inputs": {"model": ["1", 0], "shift": 3.1}},
+        "7": {"class_type": "KSampler",
+              "inputs": {"model": ["10", 0], "positive": ["4", 0],
+                         "negative": ["5", 0], "latent_image": ["6", 0],
                          "seed": seed, "steps": steps, "cfg": cfg,
                          "sampler_name": "euler", "scheduler": "simple",
                          "denoise": 1.0}},
-        "7": {"class_type": "VAEDecode",
-              "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
-        "8": {"class_type": "SaveImage",
-              "inputs": {"filename_prefix": "qwen", "images": ["7", 0]}},
+        "8": {"class_type": "VAEDecode",
+              "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": "qwen", "images": ["8", 0]}},
     }
     return workflow, used_seed
 
