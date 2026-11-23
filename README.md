@@ -176,6 +176,27 @@ python hub.py
 
 视觉投影层（mmproj / 多模态）用 `mmproj_url` 或 `mmproj_hf_file`，写法相同。
 
+### 下载 SD 模型（SDXL 等）
+
+```bash
+python get-sd-model.py            # SDXL base 1.0（约 6.9GB）
+python get-sd-model.py --refiner  # 顺便下精修模型
+python get-sd-model.py sd15       # SD1.5 基础模型
+```
+
+模型会放进 `config.json` 里 SD 的 `models/Stable-diffusion` 目录，AUTOMATIC1111
+就能直接看到。断了不用怕，重跑会从断点继续。
+
+**SDXL 能不能在 12GB 卡上跑？** 能，实测数据：
+
+| 项目 | 实测 |
+|---|---|
+| 显存占用 | 7.6 GB（还剩 4.3 GB） |
+| 1024×1024，25 步 | 37 秒 |
+| 切换模型 | 7.2 秒 |
+
+建议用 1024×1024、CFG 5 左右。软件会自动识别 SDXL 并套用这组参数，不用手动调。
+
 **三种下载方式**
 
 | 方式 | 怎么做 |
@@ -621,7 +642,8 @@ IndexTTS **不上报进度**（实测它的数据流只发心跳，没有 progre
 ├─ config.py           配置加载（config.json + 环境变量覆盖）
 ├─ config.example.json 配置模板，复制成 config.json 再改
 ├─ download.py         模型下载器（断点续传 + 进度）
-├─ get-models.py       命令行批量下载
+├─ get-models.py       命令行批量下载（聊天模型）
+├─ get-sd-model.py     下载 SD 模型（SDXL 等）
 ├─ translator.py       中英翻译服务（opus-mt-zh-en，CPU）
 ├─ tts_launch.py       IndexTTS 启动包装（绕开 DLL 冲突）
 ├─ app.ico             主图标（橙子）

@@ -76,7 +76,13 @@
     "_style_guard": "附加到每条提示词末尾，用来稳住画风。不想要就设成空字符串。",
     "style_guard": "detailed skin texture, natural lighting, film grain, sharp focus",
     "_checkpoints": "可选。给 checkpoint 起好记的显示名和说明；键名是文件名前缀。",
-    "checkpoints": {}
+    "checkpoints": {
+      "sd_xl_base_1.0": {
+        "display": "SDXL Base 1.0 · 官方",
+        "note": "Stability 官方 SDXL 基础模型，原生 1024×1024。12GB 显存实测可用（占约 7.6GB）。",
+        "tags": "官方 · 通用 · 1024"
+      }
+    }
   },
   "tts": {
     "enabled": true,
