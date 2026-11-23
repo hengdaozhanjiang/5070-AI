@@ -843,8 +843,18 @@ python -m unittest discover -s tests -v
 改版本号只需改 `hub.py` 顶部一行：
 
 ```python
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 ```
+
+**前端脚本不需要手动改版本号**。`app.js`、`browser-tts.js`、`markdown-speech.js`
+在 index.html 里不带 `?v=` 参数，hub 返回页面时按文件内容算哈希自动加上：
+
+```html
+<script src="app.js?v=27904678"></script>
+```
+
+改了前端文件，URL 就跟着变，浏览器不会再拿旧代码。以前靠手写 `?v=N`，
+忘了改就会看到"我刚加的功能怎么没出来"——这个坑踩过好几次。
 
 ---
 

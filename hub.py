@@ -53,7 +53,7 @@ PORT = 8090
 # Single source of truth for the version. It shows up in the HTTP Server header,
 # in /api/state, and in the sidebar footer, so it is defined once here.
 APP_NAME = "5070-AI"
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 APP_TITLE = "橙芯绘话"          # window title, also how we find the window
 
 # --------------------------------------------------------------------------
@@ -2327,12 +2327,45 @@ class Handler(BaseHTTPRequestHandler):
         ext = os.path.splitext(target)[1].lower()
         with open(target, "rb") as fh:
             data = fh.read()
+        # index.html gets content hashes injected into its script tags, so the
+        # browser always fetches the current JS without a manual ?v=N counter
+        if os.path.basename(target) == "index.html":
+            data = self._inject_asset_versions(data)
         self.send_response(200)
         self.send_header("Content-Type", CONTENT_TYPES.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(data)
+
+    def _asset_version(self, filename: str) -> str:
+        """A short content hash of a frontend file.
+
+        The UI references app.js and friends without a version query, and the
+        browser caches them hard. Rather than maintaining a ?v=N counter by hand
+        (which gets forgotten), derive it from the file content: change the file
+        and the URL changes with it.
+        """
+        try:
+            with open(os.path.join(UI_DIR, filename), "rb") as fh:
+                return hashlib.sha1(fh.read()).hexdigest()[:8]
+        except OSError:
+            return "0"
+
+    def _inject_asset_versions(self, html: bytes) -> bytes:
+        """Add ?v=<hash> to the frontend script tags.
+
+        Hand-maintained version counters get forgotten, and a forgotten one
+        means the browser keeps serving stale JavaScript - which looks exactly
+        like "the feature I just added is not showing up". Hashing the file
+        content ties the URL to the code automatically.
+        """
+        text = html.decode("utf-8", "replace")
+        for name in ("app.js", "markdown-speech.js", "browser-tts.js"):
+            ver = self._asset_version(name)
+            text = text.replace(f'<script src="{name}">',
+                                f'<script src="{name}?v={ver}">')
+        return text.encode("utf-8")
 
     def _proxy(self, method: str, path: str, body: bytes | None = None):
         """Stream /v1/* to the llm server, flushing SSE chunks as they arrive."""
