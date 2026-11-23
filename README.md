@@ -44,9 +44,10 @@
 - [HTTP 接口](#http-接口)
 - [常见问题](#常见问题)
 - [实现上踩过的坑](#实现上踩过的坑)
-- [许可](#许可)
+- [测试](#测试)
 - [版本号](#版本号)
 - [打赏](#打赏)
+- [许可](#许可)
 
 ---
 
@@ -747,39 +748,6 @@ python -m unittest discover -s tests -v
 
 ---
 
-## 发布到 GitHub
-
-仓库自带了 `publish.ps1`，会自动检查敏感文件、建仓并推送。
-
-**第一次需要登录一次**（之后凭据会被记住）：
-
-```powershell
-gh auth login
-# 选 GitHub.com -> HTTPS -> Login with a web browser
-```
-
-然后：
-
-```powershell
-.\publish.ps1                    # 仓库名默认 5070-AI
-.\publish.ps1 -RepoName my-tool  # 自定义名字
-.\publish.ps1 -Private           # 建私有仓库
-```
-
-脚本会先复查 `git ls-files`，确认 `config.json`、录音、聊天记录、日志都没混进去，然后才推送。
-
-**关于代理**：本机访问 GitHub 需要走系统代理（`127.0.0.1:65532`）。脚本会自动读取注册表里的代理设置并传给 `gh`。如果你的环境不需要代理，删掉脚本里那段赋值即可。
-
----
-
-## 许可
-
-[MIT](LICENSE) © 橙芯绘话 contributors
-
-模型权重不在本仓库内，各自遵循其原始许可。使用本项目接入的任何模型，请自行确认该模型的授权条款。
-
----
-
 ## 版本号
 
 版本在三个地方显示，都来自 `hub.py` 顶部的同一组常量（`APP_NAME` / `APP_VERSION`），
@@ -811,3 +779,12 @@ APP_VERSION = "1.1"
 不想花钱的话，[提 issue](https://github.com/hengdaozhanjiang/5070-AI/issues)
 说清楚你在哪一步卡住了，对这种项目来说同样有价值——尤其是安装过程中
 遇到文档没覆盖到的情况。
+
+---
+
+## 许可
+
+[MIT](LICENSE) © 橙芯绘话 contributors
+
+模型权重不在本仓库内，各自遵循其原始许可。使用本项目接入的任何模型，
+请自行确认该模型的授权条款。
