@@ -59,6 +59,7 @@ ComfyUI 和 SD 一样占满显卡，两者也互斥——启动一个会自动�
 - [实现上踩过的坑](#实现上踩过的坑)
 - [测试](#测试)
 - [版本号](#版本号)
+- [以后改代码怎么查](#以后改代码怎么查)
 - [打赏](#打赏)
 - [许可](#许可)
 
@@ -588,8 +589,12 @@ SDXL 那几个是 openrail++，可以商用。
 **实现**：`faster-whisper` 跑在 CPU 上，**不占显存**，可以和其他任何服务同时用。
 
 ```bash
-pip install faster-whisper
+# 版本必须钉死，直接 pip install faster-whisper 会在部分 AMD CPU 上段错误
+pip install faster-whisper==1.2.1 ctranslate2==4.4.0 av==12.3.0 setuptools==70.3.0
 ```
+
+> 为什么钉这几个版本，见[实现上踩过的坑](#实现上踩过的坑)的「依赖安装的坑」。
+> 报错形式是进程无声无息消失（退出码 `0xC0000005`），不看日志根本查不出来。
 
 模型默认 `small`（约 500MB，首次运行自动下载并缓存）。想要更准可以改成 `medium`，
 但 CPU 上会慢不少。
@@ -977,6 +982,88 @@ Chromium 会恢复它自己记的尺寸，命令行参数被忽略。必须在�
 **TTS 进度上报线程会泄漏**
 流读取抛异常时跳过了 `stop_tick.set()`，线程永远活着。改成 `try/finally` 保证一定能停。
 
+### ComfyUI / Qwen-Image
+
+**`TextEncodeQwenImage21` 自己就输出 latent**
+它返回 `(positive, negative, latent)` 三个值。按 SD 的习惯再接一个
+`EmptyLatentImage` 喂给采样器，会报 `too many values to unpack (expected 4)`
+——latent 的通道数不对。正确接法是直接用它的第三个输出。
+
+**`CLIPLoaderGGUF` 的 type 列表里没有 `qwen_image`**
+它列了 33 个类型可选，但就是没有 Qwen 要的那个。必须用普通的 `CLIPLoader`
+（非 GGUF 版），`type` 填 `qwen_image`。
+
+**KSampler 不接受负 seed**
+SD WebUI 用 `-1` 表示随机，ComfyUI 直接拒绝（`value_smaller_than_min`）。
+后端自己把负数转成随机值，再把实际用的数字回传给前端显示。
+
+**`resolution` 是整数不是节点连接**
+`TextEncodeQwenImage21.resolution` 要填数字（如 1024），不要接 latent 节点。
+
+**torch 2.7 没有 DynamicVRAM，出图慢 30 倍**
+日志会明确警告 `DynamicVRAM support requires Pytorch version 2.8 or later`。
+实测 torch 2.7 每步 79 秒（总共 11 分钟），换 2.11 后 2 秒。**必须 2.8+**。
+
+**ComfyUI 会缓存完全相同的 prompt**
+同一个提示词第二次只要 2 秒（直接返回上次结果）。调试进度条时会被这个坑到：
+以为功能坏了，其实是缓存命中来不及显示。
+
+**三个模型文件缺一不可**
+很多人只下主模型然后失败。主模型 3.9GB + 文本编码器 5.9GB + VAE 0.6GB，
+分别放 `unet`、`clip/text_encoders`、`vae`。
+
+### 依赖安装的坑
+
+**faster-whisper 必须钉版本组合**
+`pip install faster-whisper` 会装上最新的 ctranslate2，然后在部分 AMD CPU 上
+**直接段错误**（退出码 `0xC0000005`，没有任何提示）。实测可用的组合：
+
+```
+faster-whisper==1.2.1
+ctranslate2==4.4.0      # 4.9.1 在 Ryzen 5600 上段错误
+av==12.3.0              # 19.x 的 open() 签名变了
+setuptools==70.3.0      # 84 版删了 pkg_resources，faster-whisper 还在用
+```
+
+**VAD 开关会让进程崩**
+`vad_filter=True` 依赖 onnxruntime，同样的段错误。所以默认关掉（`config.stt.vad`）。
+
+**ComfyUI 的 requirements 会把 torch 换成 CPU 版**
+`requirements.txt` 里是裸的 `torch`，pip 会拉最新版（PyPI 上是 CPU 构建）。
+正确顺序：先装 requirements，**再重装一次 cu128 的 torch**（加 `--no-deps`）。
+
+**ComfyUI 便携版自带的 Python 3.11 跑不起来**
+它的 `torch` 编译目标和 Qwen 需要的不匹配。用**系统 Python 3.12** 跑
+`main.py`，别用 `python_embeded`。
+
+**`c10.dll` 初始化失败 = MSVCP140 太旧**
+报 `OSError: [WinError 1114] ... Error loading "c10.dll"`。系统里的
+`msvcp140.dll` 是 VS2015 的 14.00，而 cu128 的 torch 要 14.4+。
+WinSxS 里通常有新版本，拷到 Python 目录即可，**不要改 System32**（会被占用）。
+
+**7-Zip 的 BCJ2 压缩 `py7zr` 解不了**
+`ComfyUI_windows_portable_nvidia.7z` 用了 BCJ2 过滤器，`py7zr` 直接抛
+`UnsupportedCompressionMethodError`。需要真正的 7-Zip，或者只用 0.6MB 的
+`7zr.exe`（官方独立命令行版，不装系统）。
+
+### 大文件下载
+
+**代理会截断长连接**
+2.7GB 的 wheel 下到 1.1GB 就断，`pip` 报哈希不符、`urllib` 报
+`IncompleteRead`。真正的根因是代理限制单连接流量。
+
+**PyTorch 索引和实际文件不在同一个域名**
+索引在 `download.pytorch.org`，wheel 实际在 `download-r2.pytorch.org`。
+两个 CDN 内容可能不一致，这是哈希对不上的另一个来源。
+
+**解法：多线程分块 + 校验**
+开 8 条连接各取一段固定区间，每条请求都很短，谁断了重试谁，
+拼完再算 SHA256 对索引里公布的哈希。这个办法实测能把 2.7GB 完整取下来。
+
+**HuggingFace CDN 会缓存旧文件**
+`raw.githubusercontent` 也会。验证文件真实内容用 API 或直接看 blob 哈希，
+不要相信 raw 链接。
+
 ---
 
 ## 测试
@@ -1042,6 +1129,32 @@ APP_VERSION = "1.2"
 不想花钱的话，[提 issue](https://github.com/hengdaozhanjiang/5070-AI/issues)
 说清楚你在哪一步卡住了，对这种项目来说同样有价值——尤其是安装过程中
 遇到文档没覆盖到的情况。
+
+---
+
+## 以后改代码怎么查
+
+这份文档不只是给用户看的，也是给人（或 AI）今后回来改代码时用的。
+遇到问题时按这个顺序找：
+
+| 想查什么 | 去哪 |
+|---|---|
+| 某个功能的界面长什么样 | [界面导览](#界面导览) |
+| 服务和端口对应关系 | [五个服务](#五个服务) |
+| 为什么只能开一个服务 | [显存互斥规则](#显存互斥规则) |
+| 某个报错的根因 | [实现上踩过的坑](#实现上踩过的坑) |
+| 配置字段含义 | [配置](#配置) 或 `config.example.json` 的注释 |
+| HTTP 接口签名 | [HTTP 接口](#http-接口) |
+| 怎么验证没改坏 | [测试](#测试) |
+
+**改代码前先读这两节**：[显存互斥规则](#显存互斥规则)（动了会很危险）、
+[实现上踩过的坑](#实现上踩过的坑)（重踩一遍要花几小时）。
+
+**提 issue 或描述问题时**，附上这三样最有用：
+
+1. `logs/hub.log` 的尾部
+2. 对应服务的日志（界面上点服务卡片的「日志」）
+3. `nvidia-smi` 的输出（能看出是不是显存不足）
 
 ---
 

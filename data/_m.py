@@ -1,34 +1,45 @@
 ﻿import io
-msg = """文档定稿：v1.3 作为长期稳定版
+msg = """把这一轮调试的知识全部补进文档
 
-用户明确这个版本要长期用，所以把「稳定」这件事写实，不是喊口号。
+判断：对话本身不值得长期保存（太长、满是试错噪音），
+但里面的结论必须沉淀到仓库，否则以后重踩一遍要花几小时。
+查了一下，有两个真缺口：
 
-README
-- 顶部加稳定版横幅：功能定型、只修 bug 不加功能、升级不丢数据
-- 新增「稳定性说明」整章：
-  - 已验证范围（35 项单测 + 24 项浏览器端到端 + 静态检查 + 实机）
-  - 这版修掉的 8 个坑，逐条列出后果和修法
-  - 边界情况怎么处理（服务没启动、模型缺失、下载中断、新增模型）
-  - 已知限制（不是 bug，是取舍）：Qwen 首次 110 秒、SDXL 切换 150 秒、
-    VAD 关闭、Qwen 非商用、国内要镜像
-  - 升级会不会丢数据：对话/图片/预设/配置都原地保留
-  - 出问题怎么查：红色横幅 → 服务日志 → hub.log → 跑测试
-- 目录补全 ControlNet / Qwen / 语音输入 / 快捷键四节（之前漏了）
-- 「四个服务」改成「五个服务」，把 Qwen 图像正式列入
+1. TextEncodeQwenImage21 自带 latent —— 完全没记录，这个坑必重踩
+2. faster-whisper 只写了 pip install，没钉版本 —— 照做会段错误
 
-INSTALL-AI.md
-- 新增「第 4.1 步：可选服务」，含 SD、Qwen、TTS 三套配置
-- 写清 Qwen 的完整依赖链：ComfyUI + torch 2.8+cu128 + 三个模型文件
-- 记下两个可复现的坑：便携版 Python 3.11 跑不起来要用系统 3.12；
-  MSVCP140 太旧导致 c10.dll 初始化失败
+「实现上踩过的坑」从 1347 字符扩到 3784，新增三个分组：
 
-AI-PROMPT.txt
-- 标注当前版本为长期稳定版
-- 可选组件从两个变三个，加 Qwen 的特殊提醒（最重、非商用、别主动推荐）
-- 硬性前提从三条变四条，补 CPU 服务不参与互斥
+### ComfyUI / Qwen-Image
+- TextEncodeQwenImage21 自带 latent 输出，再接 EmptyLatent 会报
+  too many values to unpack
+- CLIPLoaderGGUF 的 type 列表里没有 qwen_image，要用普通 CLIPLoader
+- KSampler 不接受负 seed（SD 习惯的 -1 会被拒）
+- resolution 是整数不是节点连接
+- torch 2.7 没有 DynamicVRAM，出图慢 30 倍（79 秒/步 vs 2 秒）
+- ComfyUI 会缓存相同 prompt，调试进度条时会被骗
+- 三个模型文件缺一不可
 
-三份文档都验证过：README 23 个目录锚点全部对得上，
-ComfyUI / Qwen / SDXL 三个关键词在三份里都覆盖。
+### 依赖安装的坑
+- faster-whisper 必须钉四件套（1.2.1 / 4.4.0 / 12.3.0 / 70.3.0），
+  否则在部分 AMD CPU 上无声段错误
+- VAD 开关同样会崩，默认关掉
+- ComfyUI 的 requirements 会把 torch 换成 CPU 版，装完要重装 cu128
+- 便携版自带的 Python 3.11 跑不起来，要用系统 3.12
+- c10.dll 初始化失败 = MSVCP140 太旧，改 Python 目录别动 System32
+- 7zr/py7zr 解不了 BCJ2，要用真 7-Zip 或官方 7zr.exe
+
+### 大文件下载
+- 代理截断长连接（2.7GB 到 1.1GB 断）
+- PyTorch 索引和 wheel 不在同一域名，两个 CDN 可能不一致
+- 解法：8 路分块 + SHA256 校验
+- HF 的 raw CDN 会缓存旧文件
+
+另外：
+- faster-whisper 的安装命令改成钉死版本，并说明失败形式（无声退出）
+- 新增「以后改代码怎么查」章节：问题类型 → 该看哪节，
+  以及改代码前必须先读的两节（互斥规则、踩过的坑）
+- 目录补上这一节，24 项锚点验证全部对上
 """
 with io.open(r"G:\Strata\Chat\data\_msg.txt", "w", encoding="utf-8") as fh:
     fh.write(msg)
