@@ -334,6 +334,18 @@ Hugging Face 直连慢的话，在配置里换成镜像：
 
 ---
 
+> **当前部署状态：SD 已卸载。**
+>
+> 绘图只用 Qwen-Image（ComfyUI）。72GB 的 SD 整合包连同 6 个模型、
+> 14 个 ControlNet 已删除，`config.json` 里 `sd.enabled` 为 `false`，
+> 侧栏不再显示 SD 卡片。
+>
+> **代价**：ControlNet 参考图引导出图目前不可用（Qwen 那边还没接入）。
+> 需要的话可以按[安装](#安装)重新装一套 SD。
+>
+> 翻译服务也一起关了——它原本借用 SD 的 Python 解释器，而且 Qwen
+> 原生支持中文提示词，不再需要翻译。
+
 ## 五个服务
 
 这五个服务的路径、端口和启动参数**都在 `config.json` 里改**。`hub.py` 顶部只有一份兜底默认值（`config.py` 的 `DEFAULTS`），改那里会在你更新代码时被覆盖。

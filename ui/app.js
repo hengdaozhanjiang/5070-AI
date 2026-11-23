@@ -364,6 +364,16 @@ function renderSdCard() {
   const box = $('#sd-card');
   if (!box) return;
   const sd = state.sd || {};
+  // With SD uninstalled the card would be a dead "启动" button; hide it and its
+  // section heading instead.
+  const disabled = sd.enabled === false;
+  const section = box.previousElementSibling;
+  if (section && section.classList.contains('section-title')
+      && /绘图/.test(section.textContent)) {
+    section.hidden = disabled;
+  }
+  box.hidden = disabled;
+  if (disabled) { box.innerHTML = ''; return; }
   box.innerHTML = '';
   const dot = sd.up ? 'up' : (sd.loading ? 'loading' : 'down');
   const status = sd.up
@@ -2494,6 +2504,19 @@ function sdReady() {
   return !!(state.sd && state.sd.up);
 }
 
+/* SD is installed but not running, as opposed to removed entirely. Used by the
+   messages that would otherwise tell the user to start something that no longer
+   exists. */
+function sdInstalled() {
+  const sd = state.sd || {};
+  return sd.enabled !== false;
+}
+
+/* The right hint for "SD cannot draw right now". */
+function sdHint() {
+  return sdInstalled() ? 'SD 未启动，先点侧栏的“启动”' : 'SD 已卸载，用 Qwen 图像出图';
+}
+
 /* Which checkpoint is currently loaded, ignoring the hash suffix SD appends */
 function sdCurrentName() {
   return String((state.sd && state.sd.model) || '').split(' [')[0].trim();
@@ -2515,7 +2538,7 @@ function renderDrawCheckpoints() {
   if (!ckpts.length) {
     box.innerHTML = '<div class="hint" style="padding:4px 0">'
       + (state.sd && state.sd.loading ? 'SD 正在启动，稍后会自动出现模型列表。'
-                                      : 'SD 未启动，点左侧 SD 卡片上的“启动”后这里会列出模型。')
+                                      : sdHint())
       + '</div>';
     return;
   }
@@ -2742,7 +2765,7 @@ function rebuildSizeOptions(fam, defaults) {
 
 async function switchDrawModel(name) {
   if (state.sdSwitching || sameCheckpoint(name, sdCurrentName())) return;
-  if (!sdReady()) { toast('SD 还没启动，点卡片上的“启动”', 'err'); return; }
+  if (!sdReady()) { toast(sdHint(), 'err'); return; }
   state.sdSwitching = true;
   state.sdSwitchTarget = name;
   const hit = ((state.sd && state.sd.checkpoints) || []).find(c => sameCheckpoint(c.name, name));
@@ -2990,7 +3013,7 @@ function openDraw(prefill) {
   bindSizeInputs();
   syncSizeUi();
   showDrawSavedAt();
-  $('#draw-status').textContent = sdReady() ? '' : 'SD 未启动，先点侧栏的“启动”';
+  $('#draw-status').textContent = sdReady() ? '' : sdHint();
   modal.classList.add('open');
   if (!state.sdSwitching) setTimeout(() => $('#draw-prompt').focus(), 120);
 }
@@ -3211,7 +3234,7 @@ async function generateImage(opts = {}) {
     return rq;
   }
 
-  if (!sdReady()) { toast('SD 还没启动', 'err'); return null; }
+  if (!sdReady()) { toast(sdHint(), 'err'); return null; }
 
   const [w, h] = String(opts.size || '832x832').split('x').map(Number);
   const r = await fetch('/api/sd/generate', {

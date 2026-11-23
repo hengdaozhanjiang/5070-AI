@@ -732,6 +732,9 @@ def sd_probe() -> dict:
     port = SD["port"]
     state = {
         "label": SD["label"], "port": port, "dir": SD["dir"],
+        # the UI hides the whole card when this is false, so a removed install
+        # does not leave a dead "启动" button behind
+        "enabled": bool(SD.get("enabled")),
         "up": False, "loading": False, "error": None,
         "model": None, "checkpoints": [],
         # available regardless of whether SD is running: these come from disk
