@@ -50,6 +50,12 @@ LOG_DIR = os.path.join(HERE, "logs")
 HOST = "127.0.0.1"
 PORT = 8090
 
+# Single source of truth for the version. It shows up in the HTTP Server header,
+# in /api/state, and in the sidebar footer, so it is defined once here.
+APP_NAME = "5070-AI"
+APP_VERSION = "1.1"
+APP_TITLE = "橙芯绘话"          # window title, also how we find the window
+
 # --------------------------------------------------------------------------
 # model definitions - mirrors the two desktop shortcuts
 # --------------------------------------------------------------------------
@@ -1830,7 +1836,7 @@ ALLOWED_HOSTS = {f"{HOST}:{PORT}", f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "5070-AI/1.0"
+    server_version = f"{APP_NAME}/{APP_VERSION}"
 
     # -- logging ---------------------------------------------------------
     def log_message(self, fmt, *args):  # noqa: A003 - base class signature
@@ -1882,7 +1888,8 @@ class Handler(BaseHTTPRequestHandler):
                 "models": [probe(c) for c in MODELS.values()],
                 "sd": sd_probe(),
                 "tts": tts_probe(),
-                "hub": {"port": PORT, "version": "1.0",
+                "hub": {"port": PORT, "name": APP_NAME,
+                        "version": APP_VERSION,
                         # configuration mistakes worth showing in the UI
                         "problems": config_problems()},
             })
@@ -2259,9 +2266,6 @@ def window_geometry() -> tuple[int, int, int, int]:
     px = x + max(0, (sw - w) // 2)
     py = y + max(0, (sh - h) // 2)
     return (px, py, w, h)
-
-
-APP_TITLE = "橙芯绘话"
 
 
 def _find_app_window(timeout: float = 15.0):

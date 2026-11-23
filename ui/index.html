@@ -58,6 +58,7 @@
     <div class="side-foot">
       <span class="hub-dot" id="hub-dot"></span>
       <span id="hub-text">hub</span>
+      <button id="app-version" class="ver-chip" title="点击查看版本信息">v—</button>
       <span class="grow"></span>
       <button id="open-log" title="查看模型服务日志">日志</button>
       <button id="toggle-theme" title="切换深色 / 浅色">主题</button>
@@ -123,7 +124,7 @@
 
 <div class="modal" id="info-modal">
   <div class="sheet">
-    <header><span>模型信息</span><span class="grow"></span><button data-close="info-modal">关闭</button></header>
+    <header><span id="info-title">模型信息</span><span class="grow"></span><button data-close="info-modal">关闭</button></header>
     <div class="content" id="info-body"></div>
   </div>
 </div>
@@ -345,8 +346,8 @@
 
 <script src="vendor/purify.min.js"></script>
 <script src="vendor/marked.min.js"></script>
-<script src="markdown-speech.js?v=4"></script>
-<script src="browser-tts.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="markdown-speech.js?v=5"></script>
+<script src="browser-tts.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

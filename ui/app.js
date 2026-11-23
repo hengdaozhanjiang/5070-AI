@@ -218,6 +218,42 @@ async function startDownload(id, host) {
   setTimeout(() => { if (!document.body.contains(host)) stop(); }, 1000);
 }
 
+/* Version badge in the sidebar footer. The number comes from the hub, so it
+   always matches the code actually running - not whatever the UI was cached at. */
+function renderVersion(hub) {
+  const el = $('#app-version');
+  if (!el) return;
+  const name = hub.name || '5070-AI';
+  const ver = hub.version || '—';
+  el.textContent = `v${ver}`;
+  el.title = `${name} v${ver}\n点击查看详情`;
+  el.onclick = () => showVersionInfo(hub);
+}
+
+function showVersionInfo(hub) {
+  const name = hub.name || '5070-AI';
+  const ver = hub.version || '—';
+  const port = hub.port || '—';
+  const bits = [
+    `${name} v${ver}`,
+    `hub 端口 ${port}`,
+    `界面标题 ${document.title || '—'}`,
+    '',
+    '更新代码后如果界面看着不对，',
+    '先按 Ctrl+F5 强制刷新一次。',
+  ];
+  // 复用现有的 info 弹窗
+  if ($('#info-modal')) {
+    $('#info-title').textContent = '版本信息';
+    $('#info-body').innerHTML = bits
+      .map(t => `<div style="font-size:12.5px;line-height:1.8">${escapeHtml(t)}</div>`)
+      .join('');
+    $('#info-modal').classList.add('open');
+  } else {
+    toast(`${name} v${ver}`);
+  }
+}
+
 /* Configuration problems, shown above the sidebar.
  *
  * Without this a broken config is silent: the cards just say "未启动", and the
@@ -1816,6 +1852,7 @@ async function pollState(force = false) {
     const hub = data.hub || {};
     $('#hub-dot').classList.toggle('off', !state.models.length);
     $('#hub-text').textContent = `hub :${hub.port || '—'}`;
+    renderVersion(hub);
     state.configProblems = hub.problems || [];
     renderConfigWarnings();
     if (!state.chat) {
@@ -2372,6 +2409,9 @@ async function openLog(id) {
 }
 
 function openInfo(id) {
+  const t = $('#info-title');
+  if (t) t.textContent = '模型信息';
+
   const m = modelOf(id);
   $('#info-body').innerHTML = `
     <h4 style="margin-top:0">${escapeHtml(m.label)}</h4>
