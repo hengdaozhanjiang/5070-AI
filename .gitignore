@@ -19,6 +19,14 @@ data/voices/
 # Browser profile for the Edge app window (hundreds of MB).
 data/edge-profile/
 
+# Scratch scripts and captured output from debugging sessions. These are
+# throwaway by nature; keeping them out stops them from being committed by
+# accident when staging everything.
+data/_*
+data/*.out
+data/*.png
+data/sw.*
+
 # ---- runtime output --------------------------------------------------------
 logs/
 __pycache__/
