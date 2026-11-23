@@ -1,0 +1,321 @@
+================================================================================
+给 AI 的安装任务书 —— 橙芯绘话 / 5070-AI
+================================================================================
+把这份文件整段粘进对话框，然后说「帮我装好」即可。
+
+本文档自包含：不需要再读 README。所有路径、文件内容、命令都在这里。
+仓库：https://github.com/hengdaozhanjiang/5070-AI
+================================================================================
+
+
+【一】你要装的是什么
+--------------------------------------------------------------------------------
+这不是一个 pip install 就能跑的软件，它是一个「外壳」。
+
+它把用户机器上已经存在的三样东西接到同一个网页界面里：
+  - llama.cpp 的 llama-server.exe   -> 本地大模型对话
+  - Stable Diffusion WebUI          -> 文生图（可选）
+  - IndexTTS2                       -> 语音合成（可选）
+
+仓库里没有模型、没有推理引擎。这两样必须用户自己准备。
+
+三个硬性前提：
+  1. 只支持 Windows。代码用了 Win32 API、taskkill、nvidia-smi，Linux/macOS 跑不了。
+  2. 主程序是纯标准库，不需要 pip install 任何东西。
+  3. 四个 GPU 服务（两个聊天模型 + SD + 语音）同一时刻只能跑一个。
+     这是设计前提，不是 bug，不要试图改成并行。
+
+
+【二】动手之前，必须问用户这 6 件事
+--------------------------------------------------------------------------------
+不要替用户假设。猜错的后果写在右边。
+
+  1) 显卡型号和显存多少？
+     -> 猜错：显存不够会 OOM，或掉到共享内存慢十倍
+
+  2) 想用哪个 GGUF 模型？用户手上已经有吗？
+     -> 猜错：启动时报「模型文件不存在」
+
+  3) llama.cpp 装了吗？llama-server.exe 的完整路径是什么？
+     -> 猜错：没有任何可执行文件，第一步就断
+
+  4) 要用绘图吗？Stable Diffusion WebUI 装在哪？（不用就跳过）
+     -> 猜错：启动 SD 失败
+
+  5) 要用语音合成吗？IndexTTS2 装在哪？（不用就跳过）
+     -> 猜错：启动语音失败
+
+  6) Python 在哪？版本多少？pythonw.exe 在哪？
+     -> 猜错：版本低于 3.10 直接语法错误；
+        没有 pythonw.exe 会弹出控制台黑框
+
+如果用户说「先跑起来看看」：只配对话功能，SD 和 TTS 全部留空。这是最短路径。
+
+
+【三】目录布局
+--------------------------------------------------------------------------------
+在用户选定的 llama_dir 下，需要这样的结构：
+
+  <llama_dir>\
+    llama\llama-server.exe          <- llama.cpp 的推理服务
+    bin\ffmpeg.exe                  <- 可选，解码 WebP 图片需要
+    bin\ffprobe.exe                 <- 同上
+    <模型>.gguf                     <- 主模型
+    <mmproj>.gguf                   <- 多模态投影层，不看图可以不配
+    start-llama-server-9b.bat       <- 必须自己创建，内容见下
+    start-llama-server.bat          <- 同上（35B 用）
+
+llama-server.exe 从哪来（重要）：
+  官方 https://github.com/ggml-org/llama.cpp/releases 的 Windows 包只有
+  cpu / vulkan / sycl / opencl 四种，**没有 CUDA 版**（CUDA 要自己编译）。
+
+  N 卡用户的三个选择，按推荐排序：
+
+  1) 用 Vulkan 版（最简单，N 卡也能用）
+     下 llama-bXXXXX-bin-win-vulkan-x64.zip，解压后 llama-server.exe 在根目录。
+     性能比 CUDA 略低（通常 10-20%），但开箱即用、不需要装 CUDA Toolkit。
+
+  2) 用第三方预编译的 CUDA 版
+     搜 "llama.cpp windows cuda prebuilt"，注意来源可信度，风险自负。
+
+  3) 自己编译 CUDA 版
+     需要 CUDA Toolkit + Visual Studio，耗时较久。
+     开发这套项目时用的就是自己编的（0.8.0-dev build 11998）。
+
+  不管选哪个，最终都要有一个能 --version 跑通的 llama-server.exe。
+
+
+【四】.bat 文件的内容（最容易漏的一步）
+--------------------------------------------------------------------------------
+hub.py 会执行 cmd /c <bat>，没有这个文件模型永远启动不了。
+README 里没有写这个，所以很多人卡在这里。
+
+把下面两份存成对应文件名，把 <尖括号> 换成实际路径。
+注意：所有路径都必须用双引号包住（路径里可能有空格或中文）。
+
+--------- start-llama-server-9b.bat ---------
+@echo off
+cd /d "<LLAMA_DIR>"
+set "PATH=<LLAMA_DIR>\bin;%PATH%"
+"<LLAMA_DIR>\llama\llama-server.exe" -m "<LLAMA_DIR>\<模型>.gguf" --mmproj "<LLAMA_DIR>\<mmproj>.gguf" --host 127.0.0.1 --port 8082 -c 40960 -ngl 99 -fa on -t 6 --jinja -np 1 --no-cache-idle-slots --reasoning-budget 0
+pause
+---------------------------------------------
+
+--------- start-llama-server.bat （35B 用）---------
+@echo off
+cd /d "<LLAMA_DIR>"
+set "PATH=<LLAMA_DIR>\bin;%PATH%"
+"<LLAMA_DIR>\llama\llama-server.exe" -m "<LLAMA_DIR>\<模型>.gguf" --mmproj "<LLAMA_DIR>\<mmproj>.gguf" --host 127.0.0.1 --port 8081 -c 65536 -ngl 99 -ncmoe 24 -fa on -t 6 --jinja -np 1 --no-cache-idle-slots --reasoning-budget 0
+pause
+--------------------------------------------------
+
+每个参数为什么不能删：
+
+  --host 127.0.0.1        只监听本机。删了默认监听 0.0.0.0，局域网能访问你的模型
+  --port 8082/8081        必须和 config.json 里的 port 完全一致，否则一直显示「加载中」
+  -c 40960/65536          上下文长度，要和 config.json 的 ctx 一致
+  -ngl 99                 所有层放 GPU。调小会变慢
+  -ncmoe 24               只对 MoE 模型（35B-A3B）有意义：前 24 层专家留 CPU。
+                          调大到 16/20 会撞 12GB 显存墙，掉到 11-18 tok/s
+  -fa on                  flash attention，关掉更慢更吃显存
+  -t 6                    线程数，一般取物理核数的一半
+  --jinja                 启用模型的 chat template，关掉多轮对话会错乱
+  -np 1                   单并发槽，多槽会成倍吃显存
+  --no-cache-idle-slots   空闲时不缓存，省显存
+  --reasoning-budget 0    跳过思维链。不加的话 thinking 会吃掉输出预算，
+                          用户会以为模型话很少
+  pause                   出错时窗口停住。删了就一闪而过看不到报错
+
+注意：-ncmoe 只对 MoE 模型有用。9B 是稠密模型，加了不报错但没作用，
+不要给 9B 加，避免让人以为那是必要参数。
+
+
+【五】安装步骤
+--------------------------------------------------------------------------------
+第 1 步：确认 Python
+    python --version        # 需要 3.10 或更高
+    where pythonw           # 必须存在
+
+第 2 步：拿代码
+    cd <用户想放的目录>
+    git clone https://github.com/hengdaozhanjiang/5070-AI.git
+    cd 5070-AI
+  没有 git 就让用户在 GitHub 页面点 Code -> Download ZIP 解压。
+
+第 3 步：建配置
+    copy config.example.json config.json
+
+  用文本编辑器改。不要用记事本（可能加 BOM 导致 JSON 解析失败）。
+  只能用记事本的话，改完验证：
+    python -c "import json;json.load(open('config.json',encoding='utf-8'))"
+
+第 4 步：填配置
+  最小可用版本（只跑 9B 对话）：
+
+  {
+    "llama_dir": "D:\\llama",
+    "models": [
+      {
+        "id": "9b",
+        "label": "Qwen 9B",
+        "short": "9B",
+        "port": 8082,
+        "bat": "start-llama-server-9b.bat",
+        "model": "你的模型.gguf",
+        "mmproj": "你的mmproj.gguf",
+        "ctx": 40960,
+        "args": ["-c", "40960", "-ngl", "99"]
+      }
+    ],
+    "default_model": "9b",
+    "sd":  { "enabled": false, "dir": "" },
+    "tts": { "enabled": false, "dir": "" }
+  }
+
+  三处必须一致（最常见的失败原因）：
+    config.json 的 port        == .bat 里的 --port
+    config.json 的 model       == 磁盘上真实的 .gguf 文件名
+    config.json 的 model       == hf_file（如果配了下载来源）
+
+第 5 步：下载模型（用户没有现成模型时）
+    python get-models.py --list    # 先看缺什么
+    python get-models.py           # 下载全部缺失的，支持断点续传
+
+第 6 步：验证配置
+    python -c "import config, json; print(json.dumps(config.CFG, ensure_ascii=False, indent=2))"
+  能看到完整 JSON 就说明格式没问题。
+
+第 7 步：启动
+    python hub.py
+
+第 8 步：让用户操作界面
+  左侧「模型与服务」是折叠的，点开 -> 点模型卡片上的「启动」
+  等 30 秒到 3 分钟，状态变绿点「就绪」
+
+
+【六】怎么算装成功（逐步检查，任何一步不过就停下排查）
+--------------------------------------------------------------------------------
+  1) 配置能解析
+     python -c "import config; print(config.CFG['llama_dir'])"
+     通过：输出用户设的路径
+
+  2) hub 能起
+     python hub.py
+     通过：浏览器窗口打开，控制台无报错
+
+  3) 状态接口通
+     浏览器访问 http://127.0.0.1:8090/api/state
+     通过：返回 JSON，含 models 数组
+
+  4) 配置无问题
+     上面 JSON 里的 hub.problems 字段
+     通过：是空数组 []
+
+  5) 模型能加载
+     界面点「启动」
+     通过：绿点「就绪」，顶部标签显示 9B · :8082
+
+  6) 能真的对话
+     输入「你好」回车
+     通过：回复流式出现，底部显示 tok/s
+
+第 6 步最关键。前五步都过但第六步失败，通常是模型文件本身的问题
+（损坏、量化格式不支持），不是配置问题。
+
+
+【七】故障对照
+--------------------------------------------------------------------------------
+「启动脚本不存在：<路径>」
+    config.json 的 bat 字段指向的文件不在。
+    检查 llama_dir + bat 拼起来的完整路径。确认 .bat 真的创建了。
+
+「模型文件不存在：<路径>」
+    model 字段指向的 gguf 不在。
+    最常见：下载下来叫 xxx-Q4_K_M.gguf，但配置里写 xxx.gguf。
+    用 dir 确认真实文件名。
+
+「一直显示加载中，最后变加载超时」
+    按可能性排序：
+    1. 端口对不上（.bat 的 --port 和 config.json 的 port 必须一致）
+    2. 显存不够（nvidia-smi 看，9B 约 7GB，35B 约 20GB）
+    3. 模型文件损坏
+    4. .bat 里路径有中文或空格但没加双引号
+
+「显存没释放干净：当前空闲 X MB」
+    切换模型时上一个没卸载干净。
+    - 有其他程序占着显卡（浏览器硬件加速、游戏、其他 AI 工具）-> 关掉
+    - 驱动还没释放 -> 等 10 秒重试
+    - 卡住了 -> 重启一次
+
+界面能开，但顶部标签是「—」
+    /api/state 里 models 为空。配置的 models 数组没填，或 id 为空。
+
+语音合成启动就崩
+    看 logs/tts.log。最常见是 kaldifst 的 DLL 初始化失败，
+    需要 tts_launch.py 存在（仓库自带），它会先导入 kaldifst 再导入 torch。
+
+中文提示词翻译不生效
+    translator.py 需要 transformers / torch / sentencepiece。
+    hub 默认用 SD 的 Python 跑它。没有 SD 的话：
+    - 自己准备一个带这些包的解释器，在 config.json 的 translator.python 里指定
+    - 或者不用翻译，直接写英文提示词
+
+
+【八】绝对不要做的事
+--------------------------------------------------------------------------------
+  x pip install -r requirements.txt         没有这个文件，主程序纯标准库
+  x 用 webui.bat 启动 SD                    它会创建空 venv 下载 2.4GB torch 然后闪退，
+                                            必须用 <SD目录>\python\python.exe 直接跑 launch.py
+  x 同时启动两个 GPU 服务                   会 OOM 或卡死，硬件限制
+  x 改 config.py 里的 DEFAULTS              那是兜底默认值，改代码会被覆盖，
+                                            所有用户配置放 config.json
+  x 建议用户改用 Linux/macOS                 代码是 Windows 专用的
+  x 给 9B 加 -ncmoe                         9B 是稠密模型，没有 MoE 专家分层
+  x 用 python -m http.server 替代 hub       hub 还要代理和进程管理，不是静态服务器
+  x 把 config.json 提交进 git                里面有用户的绝对路径
+  x 自行编造 .bat 内容                       照第四节的模板改，参数漏了会出怪问题
+
+
+【九】用户说「跑不起来」时的排查顺序
+--------------------------------------------------------------------------------
+按这个顺序问，最快定位：
+
+  1. 「界面打开了吗？」
+     没打开 = hub 没起来，看控制台报错
+
+  2. 「左侧卡片显示什么状态？」
+     未启动 / 加载中 / 就绪 / 具体报错文字
+
+  3. 「点启动后多久变的？」
+     立刻失败 = 路径问题
+     过了 2 分钟才失败 = 显存或加载问题
+
+  4. 「logs\server-9b.log 最后五行是什么？」
+     这是最直接的证据
+
+  5. 「nvidia-smi 显示多少空闲显存？」
+     少于 7GB 就跑不了 9B
+
+logs 目录下各文件用途：
+  hub.log               hub 自己的运行日志
+  server-9b.log         9B 的启动和推理日志（排查启动失败看这个）
+  server-35b.log        同上
+  sd.log                Stable Diffusion 的日志
+  tts.log               IndexTTS 的日志
+  translator.log        翻译服务的日志
+
+
+【十】参考数据（RTX 5070 12GB 实测）
+--------------------------------------------------------------------------------
+  9B Q6_K：生成 73 tok/s，预填 431 tok/s，加载约 14 秒（热缓存）
+  35B Q4_K_M：生成约 40 tok/s，加载约 40 秒
+
+  显存占用：9B 约 8-9GB，35B 约 11GB，SD 约 9-10GB，IndexTTS 约 10.7GB
+  系统基础占用约 0.6-0.9GB
+
+  这些数字用来判断用户的显卡够不够。不够就别硬装，直接告诉用户。
+
+================================================================================
+结束。如果某一步和本文档不符，以实际报错为准，并把这个不一致告诉用户——
+说明文档需要更新。
+================================================================================

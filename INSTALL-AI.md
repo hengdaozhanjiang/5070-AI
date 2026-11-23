@@ -56,6 +56,20 @@
 └─ start-llama-server.bat
 ```
 
+**`llama-server.exe` 从哪来**（这一步常被误解）：
+
+官方 [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases)
+的 Windows 包只有 `cpu` / `vulkan` / `sycl` / `opencl` 四种，**没有 CUDA 版**
+（CUDA 需要自己编译）。N 卡用户按推荐排序有三种选择：
+
+1. **Vulkan 版**（最省事）— 下 `llama-bXXXXX-bin-win-vulkan-x64.zip`，解压即用。
+   性能比 CUDA 低约 10-20%，但不需要装 CUDA Toolkit。
+2. **第三方预编译 CUDA 版** — 搜 "llama.cpp windows cuda prebuilt"，来源可信度自负。
+3. **自己编译** — 需要 CUDA Toolkit + Visual Studio。开发这套项目时用的就是自己编的
+   （`0.8.0-dev build 11998`）。
+
+无论哪种，最终要有一个 `llama-server.exe --version` 能跑通的二进制。
+
 ### `.bat` 必须写的内容
 
 **9B（`start-llama-server-9b.bat`）**，把 `%%` 内的路径换成用户的实际路径：

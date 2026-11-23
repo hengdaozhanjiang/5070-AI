@@ -30,7 +30,7 @@
 
 ## 目录
 
-- [安装](#安装)（让 AI 代劳的话，用 [INSTALL-AI.md](INSTALL-AI.md)）
+- [安装](#安装)（让 AI 代劳：[AI-PROMPT.txt](AI-PROMPT.txt) 或 [INSTALL-AI.md](INSTALL-AI.md)）
 - [配置](#配置)
 - [获取模型](#获取模型)
 - [快速开始](#快速开始)
@@ -50,7 +50,12 @@
 
 ## 安装
 
-> **让 AI 帮你装？** 把 [`INSTALL-AI.md`](INSTALL-AI.md) 一起丢给它。那份文档把这里默认「读者能自己补全」的东西全写死了：`.bat` 的完整内容、每一步的确切命令、每个故障的确切含义。
+> **让 AI 帮你装？**
+> - 想直接粘贴进对话框：用 [`AI-PROMPT.txt`](AI-PROMPT.txt)（自包含，整段贴进去说「帮我装好」即可）
+> - 想当手册翻查：用 [`INSTALL-AI.md`](INSTALL-AI.md)（带目录，同内容）
+>
+> 两份都把这里默认「读者能自己补全」的东西写死了：`.bat` 的完整内容、
+> 每一步的确切命令、每个故障的确切含义、以及动手前该问用户什么。
 
 **环境要求**
 
@@ -530,7 +535,8 @@ IndexTTS **不上报进度**（实测它的数据流只发心跳，没有 progre
 ```
 5070-AI\
 ├─ README.md           本文件（给人读）
-├─ INSTALL-AI.md       安装指引（给 AI 读，含 .bat 模板与排错）
+├─ AI-PROMPT.txt       安装任务书（给 AI 读，自包含，可直接粘贴）
+├─ INSTALL-AI.md       安装指引（给 AI 读，带目录，同内容）
 ├─ LICENSE             MIT
 ├─ hub.py              主程序（后端 + 静态服务 + 反向代理）
 ├─ config.py           配置加载（config.json + 环境变量覆盖）
