@@ -687,6 +687,35 @@ def sd_model_info(name: str) -> dict:
     return {"display": base, "note": "", "tags": ""}
 
 
+# SD1.5 and SDXL are trained at different resolutions and want different
+# sampler settings. Detect the family from the checkpoint name/hash so the UI can
+# offer sane defaults instead of generating 512px SDXL (blurry) or 1024px SD1.5
+# (duplicated subjects).
+SDXL_HINTS = ("sdxl", "xl_", "_xl", "sd_xl", "sd3", "pony", "illustrious",
+              "noobai", "flux")
+
+
+def checkpoint_family(name: str, info: dict | None = None) -> str:
+    """'sdxl' or 'sd15'. SDXL checkpoints carry a different UNet signature, and
+    the sd-models endpoint reports the hash only - so fall back to the name."""
+    text = f"{name or ''}"
+    low = text.lower()
+    if any(h in low for h in SDXL_HINTS):
+        return "sdxl"
+    # SDXL weights are ~2x larger; the filename often carries the size in the
+    # 6.5GB range and SD1.5 in the 2GB range, but that is not in the API response.
+    return "sd15"
+
+
+def family_defaults(family: str) -> dict:
+    """Recommended width/height/steps/cfg for a checkpoint family."""
+    if family == "sdxl":
+        return {"width": 1024, "height": 1024, "steps": 28, "cfg": 5.0,
+                "note": "SDXL 原生 1024×1024；低于 768 会糊，高于 1280 会重复主体"}
+    return {"width": 832, "height": 832, "steps": 28, "cfg": 7.0,
+            "note": "SD1.5 原生 512 基准；768-832 是常用折中"}
+
+
 def sd_probe() -> dict:
     """State of the SD WebUI, including which checkpoints it offers."""
     port = SD["port"]
@@ -694,6 +723,8 @@ def sd_probe() -> dict:
         "label": SD["label"], "port": port, "dir": SD["dir"],
         "up": False, "loading": False, "error": None,
         "model": None, "checkpoints": [],
+        # available regardless of whether SD is running: these come from disk
+        "controlnet": controlnet_models(),
     }
     if not port_open(port):
         started = _sd_spawning
@@ -705,6 +736,9 @@ def sd_probe() -> dict:
             opts = json.loads(r.read().decode("utf-8", "replace"))
         state["up"] = True
         state["model"] = opts.get("sd_model_checkpoint")
+        fam = checkpoint_family(state["model"] or "")
+        state["family"] = fam
+        state["defaults"] = family_defaults(fam)
     except Exception as exc:  # noqa: BLE001
         state["error"] = str(exc)[:160]
         state["loading"] = True     # port bound but API not answering yet
@@ -719,12 +753,15 @@ def sd_probe() -> dict:
                 continue
             name = m.get("title") or m.get("model_name")
             info = sd_model_info(name)
+            fam = checkpoint_family(name)
             cps.append({
                 "title": m.get("model_name") or m.get("title"),
                 "name": name,
                 "display": info["display"],
                 "note": info["note"],
                 "tags": info["tags"],
+                "family": fam,
+                "defaults": family_defaults(fam),
             })
         state["checkpoints"] = cps
     except Exception:  # noqa: BLE001
@@ -1530,6 +1567,185 @@ def _start_translator() -> None:
         _dbg(f"could not start translator: {exc}")
 
 
+# --------------------------------------------------------------------------
+# ControlNet
+#
+# The extension is already installed with 14 models on disk. The API takes the
+# control image as a base64 data URL inside alwayson_scripts, plus a unit entry
+# describing which model to use and how strongly.
+# --------------------------------------------------------------------------
+
+# Friendly names for the models found in models/ControlNet. The key is matched
+# as a substring of the .pth filename, so any v11 checkpoint works.
+CONTROLNET_MODELS = {
+    "canny":      ("control_v11p_sd15_canny",      "边缘检测 · 保留轮廓线"),
+    "openpose":   ("control_v11p_sd15_openpose",   "姿势 · 照着人物骨骼摆姿势"),
+    "depth":      ("control_v11f1p_sd15_depth",    "深度 · 保留前后空间关系"),
+    "lineart":    ("control_v11p_sd15_lineart",    "线稿 · 给线稿上色"),
+    "anime":      ("control_v11p_sd15s2_lineart_anime", "动漫线稿 · 二次元上色"),
+    "scribble":   ("control_v11p_sd15_scribble",   "涂鸦 · 草图变成品"),
+    "softedge":   ("control_v11p_sd15_softedge",   "柔和边缘 · 宽容度更高的轮廓"),
+    "seg":        ("control_v11p_sd15_seg",        "语义分割 · 按色块分区上色"),
+    "normalbae":  ("control_v11p_sd15_normalbae",  "法线贴图 · 保留表面朝向"),
+    "mlsd":       ("control_v11p_sd15_mlsd",       "直线检测 · 建筑和室内"),
+    "tile":       ("control_v11f1e_sd15_tile",     "平铺细节 · 放大时补细节"),
+    "inpaint":    ("control_v11p_sd15_inpaint",    "局部重绘"),
+    "ip2p":       ("control_v11e_sd15_ip2p",       "指令改图"),
+    "shuffle":    ("control_v11e_sd15_shuffle",    "随机打散重排"),
+}
+
+
+
+# --------------------------------------------------------------------------
+# speech-to-text (faster-whisper, CPU)
+# --------------------------------------------------------------------------
+def stt_conf() -> dict:
+    return CFG.get("stt") or {}
+
+
+def stt_up() -> bool:
+    cfg = stt_conf()
+    return bool(cfg.get("enabled")) and port_open(int(cfg.get("port") or 8092))
+
+
+def _start_stt() -> None:
+    """Launch the speech-to-text service if voice input is enabled."""
+    cfg = stt_conf()
+    if not cfg.get("enabled"):
+        return
+    port = int(cfg.get("port") or 8092)
+    if port_open(port):
+        return
+    script = os.path.join(HERE, "speech2text.py")
+    if not os.path.exists(script):
+        return
+    py = cfg.get("python") or sys.executable
+    if not os.path.exists(py):
+        _dbg(f"stt: python not found: {py}")
+        return
+    os.makedirs(LOG_DIR, exist_ok=True)
+    try:
+        log = open(os.path.join(LOG_DIR, "stt.log"), "ab", buffering=0)
+        subprocess.Popen(
+            [py, script], cwd=HERE,
+            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _dbg(f"stt start failed: {exc}")
+
+
+def stt_transcribe(raw: bytes) -> dict:
+    """Forward recorded audio to the local whisper service."""
+    cfg = stt_conf()
+    if not cfg.get("enabled"):
+        return {"ok": False, "message": "语音输入未启用（config.json 的 stt.enabled）"}
+    port = int(cfg.get("port") or 8092)
+    if not port_open(port):
+        # try once, the service may have died
+        _start_stt()
+        time.sleep(1.0)
+        if not port_open(port):
+            return {"ok": False,
+                    "message": "语音识别服务没在运行。首次启动需要下载模型，"
+                               "点「语音」卡片上的启动，或看 logs/stt.log"}
+    try:
+        req = urllib.request.Request(
+            f"http://{HOST}:{port}/transcribe", data=raw,
+            headers={"Content-Type": "application/octet-stream"}, method="POST")
+        with urllib.request.urlopen(req, timeout=300) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"识别请求失败：{exc}"}
+
+
+def stt_probe() -> dict:
+    cfg = stt_conf()
+    port = int(cfg.get("port") or 8092)
+    state = {"enabled": bool(cfg.get("enabled")), "port": port,
+             "model": cfg.get("model") or "small", "up": False, "error": None}
+    if not port_open(port):
+        return state
+    try:
+        with urllib.request.urlopen(f"http://{HOST}:{port}/health", timeout=5) as r:
+            info = json.loads(r.read().decode("utf-8", "replace"))
+        state["up"] = bool(info.get("loaded"))
+        state["error"] = info.get("error")
+    except Exception as exc:  # noqa: BLE001
+        state["error"] = str(exc)[:160]
+    return state
+
+def controlnet_models() -> list[dict]:
+    """Which ControlNet models actually exist on disk.
+
+    Reading the directory beats trusting the hard-coded table: the user may have
+    added or deleted .pth files since this was written.
+    """
+    base = os.path.join(SD.get("dir") or "", "models", "ControlNet")
+    found = {}
+    if os.path.isdir(base):
+        try:
+            for name in os.listdir(base):
+                if not name.lower().endswith((".pth", ".safetensors")):
+                    continue
+                stem = os.path.splitext(name)[0]
+                for key, (prefix, label) in CONTROLNET_MODELS.items():
+                    if stem.startswith(prefix):
+                        found[key] = {"key": key, "file": name, "label": label}
+                        break
+        except OSError:
+            pass
+    return [found[k] for k in CONTROLNET_MODELS if k in found]
+
+
+def _controlnet_args(payload: dict) -> tuple[list, str]:
+    """Build the alwayson_scripts block for ControlNet.
+
+    Returns (alwayson_scripts, error). An empty list means "plain txt2img".
+    """
+    cn = payload.get("controlnet") or {}
+    if not cn or not cn.get("image"):
+        return [], ""
+
+    key = str(cn.get("model") or "").strip()
+    models = {m["key"]: m for m in controlnet_models()}
+    if key not in models:
+        return [], f"ControlNet 模型不存在：{key}。" \
+                    f"可用的有：{', '.join(models) or '（一个都没有）'}"
+
+    image = str(cn["image"])
+    # SD wants a bare base64 string or a data URL; pass data URLs through as-is
+    if not image.startswith("data:"):
+        image = f"data:image/png;base64,{image}"
+
+    weight = float(cn.get("weight") or 1.0)
+    weight = max(0.0, min(2.0, weight))
+    guidance_end = cn.get("guidance_end")
+    try:
+        guidance_end = float(guidance_end) if guidance_end is not None else 1.0
+    except (TypeError, ValueError):
+        guidance_end = 1.0
+    guidance_end = max(0.1, min(1.0, guidance_end))
+
+    unit = {
+        "enabled": True,
+        "module": str(cn.get("module") or "none"),
+        "model": models[key]["file"],
+        "weight": weight,
+        "guidance_start": 0.0,
+        "guidance_end": guidance_end,
+        "control_mode": 0,          # 0 = balanced
+        "pixel_perfect": True,
+        "resize_mode": 1,           # crop and resize
+        "image": image,
+    }
+    # "none" as the preprocessor means the input is already a control map
+    if unit["module"] == "none" and cn.get("invert"):
+        unit["control_mode"] = 1    # invert (useful for depth/normal maps)
+
+    return [{"name": "controlnet", "args": [[unit]]}], ""
+
+
 def sd_generate(payload: dict) -> dict:
     """POST to the SD txt2img API and return the decoded images."""
     port = SD["port"]
@@ -1565,6 +1781,12 @@ def sd_generate(payload: dict) -> dict:
     if payload.get("checkpoint"):
         body["override_settings"] = {"sd_model_checkpoint": payload["checkpoint"]}
         body["override_settings_restore_afterwards"] = False
+
+    scripts, cn_error = _controlnet_args(payload)
+    if cn_error:
+        return {"ok": False, "message": cn_error}
+    if scripts:
+        body["alwayson_scripts"] = {"controlnet": {"args": scripts[0]["args"]}}
 
     data = json.dumps(body).encode("utf-8")
 
@@ -1888,6 +2110,7 @@ class Handler(BaseHTTPRequestHandler):
                 "models": [probe(c) for c in MODELS.values()],
                 "sd": sd_probe(),
                 "tts": tts_probe(),
+                "stt": stt_probe(),
                 "hub": {"port": PORT, "name": APP_NAME,
                         "version": APP_VERSION,
                         # configuration mistakes worth showing in the UI
@@ -1931,6 +2154,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             merged = merge_chats(data)
             self._json({"ok": True, "revision": len(merged["chats"])})
+        elif path == "/api/stt":
+            # raw audio body, not JSON: the browser posts a Blob directly
+            audio = body or b""
+            self._json(stt_transcribe(audio))
         elif path == "/api/download":
             try:
                 payload = json.loads(body or b"{}")
@@ -2619,6 +2846,7 @@ def main() -> int:
     # warm up the local CPU translator so the first drawing does not wait for
     # the 6-second model load. It stays resident and uses no VRAM.
     _start_translator()
+    _start_stt()
     httpd = Hub((HOST, PORT), Handler)
     # pythonw has no console: send our own request log to a file instead.
     try:

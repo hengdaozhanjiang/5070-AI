@@ -168,6 +168,110 @@ button { cursor: pointer; border: 0; background: none; }
   white-space: nowrap;
 }
 
+
+
+/* mic button: pulses while recording, dims while transcribing */
+#mic { transition: color .15s, background .15s, box-shadow .2s; }
+#mic.rec {
+  color: #ff6b6b;
+  background: color-mix(in srgb, #ff6b6b 18%, transparent);
+  box-shadow: 0 0 0 0 rgba(255, 107, 107, .55);
+  animation: mic-pulse 1.4s ease-out infinite;
+}
+#mic.busy {
+  color: var(--accent);
+  opacity: .75;
+  cursor: progress;
+}
+@keyframes mic-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 107, 107, .5); }
+  70%  { box-shadow: 0 0 0 7px rgba(255, 107, 107, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0); }
+}
+
+/* keyboard shortcut table */
+.kbd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.kbd-table td {
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+.kbd-table td:first-child { width: 42%; white-space: nowrap; }
+.kbd-table kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ControlNet block inside the drawing panel */
+.cn-block {
+  margin: 12px 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.cn-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.cn-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.cn-toggle input { margin: 0; }
+.cn-pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+  flex-wrap: wrap;
+}
+.cn-pick .sel { flex: 1 1 160px; min-width: 120px; }
+.cn-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 9px 0;
+  padding: 7px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+}
+.cn-preview[hidden] { display: none; }
+.cn-preview img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: 0 0 auto;
+}
+.cn-preview .cn-meta {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.cn-block .row { margin-top: 8px; }
+.cn-block .hint { margin: 8px 0 0; }
+
 /* configuration problems banner, sits above everything in the sidebar */
 .config-warn {
   margin: 12px 0 4px;

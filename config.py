@@ -93,6 +93,21 @@ DEFAULTS = {
         # how many parallel connections for a single file (0 = let the server decide)
         "connections": 4,
     },
+    # local speech-to-text (faster-whisper, CPU) for voice input
+    "stt": {
+        "enabled": True,
+        "port": 8092,
+        # tiny / base / small / medium — small is a good CPU tradeoff
+        "model": "small",
+        "compute_type": "int8",
+        # VAD 用 onnxruntime，在部分 AMD 机器上会段错误，默认关闭
+        "vad": False,
+        "beam_size": 5,
+        # leave empty to let faster-whisper download and cache it
+        "model_dir": "",
+        # python that has faster-whisper installed; empty = the one running hub
+        "python": "",
+    },
     # local CPU translator used to turn Chinese prompts into English
     "translator": {
         "enabled": True,

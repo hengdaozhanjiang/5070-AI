@@ -2276,6 +2276,54 @@ function renderDrawCheckpoints() {
 }
 
 /* Switch the SD checkpoint from inside the chat page. */
+/* Match the size / cfg controls to whichever checkpoint family is loaded. */
+function applyFamilyDefaults(hit) {
+  const fam = (hit && hit.family) || (state.sd && state.sd.family) || 'sd15';
+  const d = (hit && hit.defaults) || (state.sd && state.sd.defaults)
+    || (fam === 'sdxl'
+      ? { width: 1024, height: 1024, cfg: 5 }
+      : { width: 832, height: 832, cfg: 7 });
+
+  rebuildSizeOptions(fam, d);
+
+  const cfg = $('#draw-cfg');
+  if (cfg) {
+    cfg.value = d.cfg;
+    $('#draw-cfg-val').textContent = Number(d.cfg).toFixed(1);
+  }
+
+  const note = $('#draw-family-note');
+  if (note) {
+    note.textContent = fam === 'sdxl'
+      ? `SDXL · 推荐 ${d.width}×${d.height}，CFG 5 左右`
+      : `SD1.5 · 推荐 ${d.width}×${d.height}，CFG 7 左右`;
+    note.dataset.family = fam;
+  }
+  saveDrawDraft();
+}
+
+function rebuildSizeOptions(fam, defaults) {
+  const sel = $('#draw-size');
+  if (!sel) return;
+  const cur = sel.value;
+  const base = fam === 'sdxl'
+    ? [['1024x1024', '方图 1024×1024（SDXL 原生）'],
+       ['1152x896', '横版 1152×896'],
+       ['896x1152', '竖版 896×1152'],
+       ['1216x832', '宽屏 1216×832'],
+       ['768x768', '小图 768×768']]
+    : [['832x832', '方图 832×832'],
+       ['768x1024', '竖版 768×1024'],
+       ['1024x768', '横版 1024×768'],
+       ['512x512', '小图 512×512'],
+       ['640x896', '竖版 640×896']];
+  sel.innerHTML = base.map(([v, label], i) =>
+    `<option value="${v}"${i === 0 ? ' selected' : ''}>${label}</option>`).join('');
+  // keep the user's choice if it still exists in the new list
+  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  else sel.value = base[0][0];
+}
+
 async function switchDrawModel(name) {
   if (state.sdSwitching || sameCheckpoint(name, sdCurrentName())) return;
   if (!sdReady()) { toast('SD 还没启动，点卡片上的“启动”', 'err'); return; }
@@ -2297,6 +2345,9 @@ async function switchDrawModel(name) {
     if (!r.ok) throw new Error(r.message || '切换失败');
     await pollState(true);
     const secs = r.seconds != null ? r.seconds : ((Date.now() - t0) / 1000).toFixed(1);
+    // SD1.5 and SDXL want different sizes / cfg; adopting the new model's
+    // recommended values avoids 512px SDXL (mushy) and 1024px SD1.5 (twin heads)
+    applyFamilyDefaults(hit);
     toast(`已切换到 ${short}（${secs}s）`, 'ok');
     $('#draw-status').textContent = `已切换 · ${short}（${secs}s）`;
   } catch (e) {
@@ -2356,6 +2407,11 @@ function showDrawSavedAt() {
 }
 
 function openDraw(prefill) {
+  renderControlnetModels();
+  if (state.cnImage) showControlPreview(state.cnImage);
+  // size/cfg follow whichever checkpoint is loaded
+  const cur = ((state.sd && state.sd.checkpoints) || []).find(c => sameCheckpoint(c.name, sdCurrentName()));
+  applyFamilyDefaults(cur || null);
   const modal = $('#draw-modal');
   if (prefill != null) {
     $('#draw-prompt').value = prefill;
@@ -2367,6 +2423,190 @@ function openDraw(prefill) {
   $('#draw-status').textContent = sdReady() ? '' : 'SD 未启动，先点侧栏的“启动”';
   modal.classList.add('open');
   if (!state.sdSwitching) setTimeout(() => $('#draw-prompt').focus(), 120);
+}
+
+/* ---------------------------------------------------------------- 语音输入
+   MediaRecorder captures WebM/Opus, which the local whisper service decodes
+   directly - no ffmpeg, no temp files in the browser. Recording is disabled
+   while another recording is running so the button cannot get out of sync. */
+const Recorder = {
+  media: null,
+  chunks: [],
+  active: false,
+  startedAt: 0,
+  maxMs: 60000,          // hard stop at 60 s so a forgotten recording ends
+  _timer: null,
+};
+
+async function startRecording() {
+  if (Recorder.active) return;
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    toast('这个浏览器不支持录音', 'err');
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    toast('拿不到麦克风权限：' + (e.message || e), 'err');
+    return;
+  }
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : '';
+  let rec;
+  try {
+    rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  } catch (e) {
+    stream.getTracks().forEach(t => t.stop());
+    toast('录音初始化失败：' + (e.message || e), 'err');
+    return;
+  }
+  Recorder.media = rec;
+  Recorder.chunks = [];
+  Recorder.active = true;
+  Recorder.startedAt = Date.now();
+
+  rec.ondataavailable = ev => { if (ev.data && ev.data.size) Recorder.chunks.push(ev.data); };
+  rec.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    clearTimeout(Recorder._timer);
+    Recorder.active = false;
+    setMicState('idle');
+    const blob = new Blob(Recorder.chunks, { type: rec.mimeType || 'audio/webm' });
+    Recorder.chunks = [];
+    if (blob.size < 1200) {           // basically silence / accidental tap
+      toast('录音太短，没听到内容');
+      return;
+    }
+    await transcribeBlob(blob);
+  };
+
+  rec.start();
+  setMicState('recording');
+  Recorder._timer = setTimeout(() => {
+    if (Recorder.active) { stopRecording(); toast('录音到 60 秒上限，已停止'); }
+  }, Recorder.maxMs);
+}
+
+function stopRecording() {
+  if (!Recorder.active || !Recorder.media) return;
+  try { Recorder.media.stop(); } catch { /* already stopped */ }
+}
+
+function setMicState(mode) {
+  const btn = $('#mic');
+  if (!btn) return;
+  btn.classList.toggle('rec', mode === 'recording');
+  btn.classList.toggle('busy', mode === 'busy');
+  btn.title = mode === 'recording' ? '点击停止录音'
+    : mode === 'busy' ? '识别中…'
+    : '点击开始录音（再点一次结束）';
+}
+
+async function transcribeBlob(blob) {
+  setMicState('busy');
+  const input = $('#input');
+  const before = input.value;
+  toast('识别中…');
+  try {
+    const r = await fetch('/api/stt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: blob,
+    }).then(x => x.json()).catch(e => ({ ok: false, message: String(e) }));
+    if (!r.ok) {
+      toast(r.message || '识别失败', 'err');
+      return;
+    }
+    const text = (r.text || '').trim();
+    if (!text) { toast('没听清，再试一次'); return; }
+    // append rather than replace, so dictation can continue an existing draft
+    input.value = before ? `${before}${/\s$/.test(before) ? '' : ' '}${text}` : text;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    autoGrow();
+    input.focus();
+    toast(`已转写（${r.seconds || 0}s 音频）`, 'ok');
+  } finally {
+    setMicState('idle');
+  }
+}
+
+/* ------------------------------------------------------------------ ControlNet
+   The extension does the real work; we only carry a reference image plus a
+   model choice to the backend. The image is sent as a data URL so nothing has
+   to be written to disk for a one-off generation. */
+function renderControlnetModels() {
+  const sel = $('#draw-cn-model');
+  if (!sel) return;
+  const list = (state.sd && state.sd.controlnet) || [];
+  const cur = state.settings.cnModel || '';
+  if (!list.length) {
+    sel.innerHTML = '<option value="">（没有找到 ControlNet 模型）</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = list.map(m =>
+    `<option value="${escapeHtml(m.key)}"${m.key === cur ? ' selected' : ''}>`
+    + `${escapeHtml(m.label)}</option>`).join('');
+  if (!cur && list[0]) state.settings.cnModel = list[0].key;
+}
+
+/* Shrink the reference image before upload: SD only needs the structure, and a
+   phone photo would otherwise be several MB through the local socket. */
+function readControlImage(file, maxEdge = 1024) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('读取失败'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('不是有效图片'));
+      img.onload = () => {
+        const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve({ dataUrl: cv.toDataURL('image/jpeg', 0.9), width: w, height: h,
+                  name: file.name, bytes: file.size });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function showControlPreview(info) {
+  const box = $('#draw-cn-preview');
+  if (!box) return;
+  if (!info) {
+    box.hidden = true;
+    $('#draw-cn-drop').hidden = true;
+    return;
+  }
+  box.hidden = false;
+  $('img', box).src = info.dataUrl;
+  $('.cn-meta', box).textContent =
+    `${info.width}×${info.height} · ${Math.round((info.bytes || 0) / 1024)} KB`;
+  $('#draw-cn-drop').hidden = false;
+}
+
+/* What the backend expects for the controlnet field, or null when disabled. */
+function controlnetPayload() {
+  if (!$('#draw-cn-on') || !$('#draw-cn-on').checked) return null;
+  if (!state.cnImage) {
+    toast('ControlNet 已启用但还没选参考图', 'err');
+    return false;   // false = abort
+  }
+  return {
+    model: $('#draw-cn-model').value,
+    image: state.cnImage.dataUrl,
+    weight: Number($('#draw-cn-weight').value) || 1,
+    guidance_end: Number($('#draw-cn-end').value) || 1,
+    module: 'none',      // the picture is already the control map
+  };
 }
 
 async function generateImage(opts = {}) {
@@ -2385,6 +2625,7 @@ async function generateImage(opts = {}) {
       steps: opts.steps, cfg_scale: opts.cfg,
       seed: opts.seed, batch_size: opts.batch,
       checkpoint: opts.checkpoint || undefined,
+      controlnet: opts.controlnet || undefined,
     }),
   }).then(x => x.json()).catch(e => ({ ok: false, message: String(e) }));
   if (!r.ok) { toast(r.message || '生成失败', 'err'); return null; }
@@ -2649,21 +2890,170 @@ function bind() {
   };
 
   document.addEventListener('keydown', e => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '')
+      || (e.target && e.target.isContentEditable);
+
     if (e.key === 'Escape') {
-      $$('.modal.open').forEach(m => {
-        m.classList.remove('open');
-        if (m._resolve) m._resolve(false);
-      });
-      $('#viewer').classList.remove('open');
+      // 有弹窗就先关弹窗；没有弹窗时，Esc 用来停止生成
+      const openModals = $$('.modal.open');
+      if (openModals.length) {
+        openModals.forEach(m => {
+          m.classList.remove('open');
+          if (m._resolve) m._resolve(false);
+        });
+        $('#viewer').classList.remove('open');
+        return;
+      }
+      if (state.streaming) {
+        e.preventDefault();
+        stopStream();
+        toast('已停止生成');
+        return;
+      }
     }
-    if (e.key === 'n' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+
+    // 输入框里只响应"带修饰键"的组合，避免干扰正常打字
+    if (typing && !(e.ctrlKey || e.metaKey)) return;
+
+    const mod = e.ctrlKey || e.metaKey;
+
+    // Ctrl/Cmd+Shift+N 新对话
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault();
       newChat();
+      return;
+    }
+
+    // Ctrl/Cmd+K 打开绘图面板
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      openDraw();
+      return;
+    }
+
+    // Ctrl/Cmd+, 打开设置
+    if (mod && e.key === ',') {
+      e.preventDefault();
+      openSettings();
+      return;
+    }
+
+    // Ctrl/Cmd+/ 显示快捷键帮助
+    if (mod && e.key === '/') {
+      e.preventDefault();
+      showShortcuts();
+      return;
+    }
+
+    // Ctrl/Cmd+E 导出当前对话
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      if ($('#export-chat')) $('#export-chat').click();
+      return;
+    }
+
+    // 有弹窗打开时不处理下面的单键快捷键
+    if ($$('.modal.open').length) return;
+
+    // Ctrl/Cmd+Enter 强制发送（即使焦点不在输入框）
+    if (mod && e.key === 'Enter') {
+      e.preventDefault();
+      if ($('#input').value.trim()) $('#send').click();
+      return;
+    }
+
+    // T 切主题，/ 聚焦输入框
+    if (!mod && !e.altKey && !typing) {
+      if (e.key.toLowerCase() === 't') {
+        e.preventDefault();
+        $('#toggle-theme').click();
+        return;
+      }
+      if (e.key === '/') {
+        e.preventDefault();
+        $('#input').focus();
+        return;
+      }
     }
   });
 
   $('#open-log').onclick = () => openLog(state.chat ? state.chat.model : (state.models[0] || {}).id || '35b');
   $('#open-draw').onclick = () => openDraw();
+
+  // ---- 语音输入
+  const mic = $('#mic');
+  if (mic) {
+    mic.onclick = () => {
+      if (Recorder.active) stopRecording();
+      else startRecording();
+    };
+  }
+
+  // ---- ControlNet 控件
+  const cnOn = $('#draw-cn-on');
+  if (cnOn) {
+    cnOn.checked = !!state.settings.cnEnabled;
+    $('#draw-cn-body').hidden = !cnOn.checked;
+    cnOn.onchange = () => {
+      state.settings.cnEnabled = cnOn.checked;
+      saveSettings();
+      $('#draw-cn-body').hidden = !cnOn.checked;
+      renderControlnetModels();
+      if (cnOn.checked && !state.cnImage) {
+        $('#draw-cn-hint').textContent = '还没选参考图，点上面的「选参考图」。';
+      }
+    };
+  }
+  const cnChoose = $('#draw-cn-choose');
+  if (cnChoose) {
+    cnChoose.onclick = () => $('#draw-cn-file').click();
+  }
+  const cnFile = $('#draw-cn-file');
+  if (cnFile) {
+    cnFile.onchange = async () => {
+      const f = cnFile.files && cnFile.files[0];
+      if (!f) return;
+      try {
+        state.cnImage = await readControlImage(f);
+        showControlPreview(state.cnImage);
+        $('#draw-cn-hint').textContent = '已就绪，直接点生成。';
+      } catch (e) {
+        toast('读取参考图失败：' + e.message, 'err');
+      } finally {
+        cnFile.value = '';   // allow choosing the same file again
+      }
+    };
+  }
+  const cnDrop = $('#draw-cn-drop');
+  if (cnDrop) {
+    cnDrop.onclick = () => {
+      state.cnImage = null;
+      showControlPreview(null);
+      $('#draw-cn-hint').textContent = '选一张图，生成的画面会沿用它的结构。';
+    };
+  }
+  const cnModel = $('#draw-cn-model');
+  if (cnModel) {
+    cnModel.onchange = () => {
+      state.settings.cnModel = cnModel.value;
+      saveSettings();
+    };
+  }
+  const cnWeight = $('#draw-cn-weight');
+  if (cnWeight) {
+    cnWeight.oninput = () => {
+      $('#draw-cn-weight-val').textContent =
+        (Number(cnWeight.value) || 0).toFixed(2);
+    };
+    cnWeight.oninput();
+  }
+  const cnEnd = $('#draw-cn-end');
+  if (cnEnd) {
+    cnEnd.oninput = () => {
+      $('#draw-cn-end-val').textContent = (Number(cnEnd.value) || 1).toFixed(2);
+    };
+    cnEnd.oninput();
+  }
   $('#open-tts').onclick = () => openTts();
 
   // collapse group: default closed (the summary line already says what is up),
@@ -2801,6 +3191,13 @@ function bind() {
     const stopTrack = trackJob('sd', barHost, '生成中', () => {
       if (barHost) barHost.innerHTML = '';
     });
+    const cn = controlnetPayload();
+    if (cn === false) {
+      if (typeof stopTrack === 'function') stopTrack();
+      if (barHost) barHost.innerHTML = '';
+      btn.disabled = false;
+      return;
+    }
     try {
       const [w, h] = $('#draw-size').value.split('x').map(Number);
       const r = await generateImage({
@@ -2810,6 +3207,7 @@ function bind() {
         steps: Number($('#draw-steps').value) || 28,
         cfg: Number($('#draw-cfg').value) || 7,
         seed: Number($('#draw-seed').value),
+        controlnet: cn || undefined,
       });
       const out = $('#draw-out');
       if (r) {
@@ -2867,6 +3265,34 @@ function renderContinueChip() {
     ? `输出被截断时自动续写，最多 ${state.settings.continueRounds} 段；点击关闭`
     : '已关闭自动续写；点击开启';
   $('#continue-label').textContent = on ? '自动续写' : '续写关闭';
+}
+
+/* Keyboard cheat sheet, opened with Ctrl+/. Kept as a plain modal because the
+   list is short and does not need a route. */
+const SHORTCUTS = [
+  ['Ctrl / Cmd + Enter', '发送消息（焦点不在输入框时也能用）'],
+  ['Enter', '发送（输入框内）'],
+  ['Shift + Enter', '换行'],
+  ['Esc', '关闭弹窗 / 停止生成'],
+  ['Ctrl / Cmd + Shift + N', '新对话'],
+  ['Ctrl / Cmd + K', '打开绘图面板'],
+  ['Ctrl / Cmd + ,', '打开设置'],
+  ['Ctrl / Cmd + E', '导出当前对话'],
+  ['Ctrl / Cmd + /', '显示这个列表'],
+  ['/', '聚焦输入框'],
+  ['T', '切换深色 / 浅色'],
+];
+
+function showShortcuts() {
+  const body = $('#info-body');
+  if (!body) return;
+  $('#info-title').textContent = '快捷键';
+  body.innerHTML = `<table class="kbd-table">${
+    SHORTCUTS.map(([k, d]) =>
+      `<tr><td><kbd>${escapeHtml(k)}</kbd></td><td>${escapeHtml(d)}</td></tr>`
+    ).join('')
+  }</table>`;
+  $('#info-modal').classList.add('open');
 }
 
 function openSettings() {
@@ -2981,5 +3407,24 @@ async function boot() {
   }
   if (want) history.replaceState(null, '', location.pathname);
 }
+
+/* A small, deliberate debug surface. Automated tests drive the app
+   through this instead of poking at module-private state, which does not live
+   on `window`. */
+window.ChengXin = {
+  get state() { return state; },
+  controlnetPayload,
+  applyFamilyDefaults,
+  rebuildSizeOptions,
+  renderControlnetModels,
+  openDraw,
+  openSettings,
+  openTts,
+  newChat,
+  startRecording,
+  stopRecording,
+  get recorder() { return Recorder; },
+  version: () => (state.hubVersion || ''),
+};
 
 boot();

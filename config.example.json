@@ -111,5 +111,17 @@
     "port": 8091,
     "_model_dir": "可选。opus-mt-zh-en 的本地目录；留空则首次运行时从 Hugging Face 下载。",
     "model_dir": ""
+  },
+  "stt": {
+    "_comment": "语音转文字（faster-whisper，纯 CPU）。用于在聊天框按住说话输入。",
+    "enabled": true,
+    "port": 8092,
+    "model": "small",
+    "compute_type": "int8",
+    "model_dir": "",
+    "python": "",
+    "vad": false,
+    "beam_size": 5,
+    "_vad_note": "VAD 会加载 onnxruntime，部分机器上段错误导致整个服务崩溃，默认关闭"
   }
 }

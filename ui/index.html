@@ -95,6 +95,13 @@
               <path d="m4 17 4.5-4.5a2 2 0 0 1 2.8 0L15 16"/><path d="m14 14 2-2a2 2 0 0 1 2.8 0L21 14.5"/>
             </svg>
           </button>
+          <button class="icon-btn" id="mic" title="按住说话（或点击开始/停止录音）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="3" width="6" height="11" rx="3"/>
+              <path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>
+            </svg>
+          </button>
           <span class="hint" id="hint">9B 快答 · 35B 深思</span>
           <span class="grow"></span>
           <button class="send" id="send">
@@ -265,7 +272,42 @@
         <label class="row col">
           <span>绘图模型（点击切换，加载需 20-60 秒）</span>
           <div class="ck-list" id="draw-ckpts"></div>
+          <small class="hint" id="draw-family-note"></small>
         </label>
+        <!-- ControlNet: give it a reference image and it follows that image's
+             pose / outline / depth instead of inventing its own. -->
+        <div class="cn-block">
+          <div class="cn-head">
+            <span>ControlNet 参考图</span>
+            <label class="cn-toggle">
+              <input type="checkbox" id="draw-cn-on">
+              <span>启用</span>
+            </label>
+          </div>
+          <div id="draw-cn-body" hidden>
+            <div class="cn-pick">
+              <select id="draw-cn-model" class="sel"></select>
+              <input type="file" id="draw-cn-file" accept="image/*" hidden>
+              <button class="mini-btn" id="draw-cn-choose">选参考图</button>
+              <button class="mini-btn" id="draw-cn-drop" hidden>移除</button>
+            </div>
+            <div class="cn-preview" id="draw-cn-preview" hidden>
+              <img alt="ControlNet 参考图">
+              <div class="cn-meta"></div>
+            </div>
+            <label class="row">
+              <span>权重</span>
+              <input type="range" id="draw-cn-weight" min="0" max="2" step="0.05" value="1">
+              <output id="draw-cn-weight-val">1.00</output>
+            </label>
+            <label class="row">
+              <span>停止引导</span>
+              <input type="range" id="draw-cn-end" min="0.1" max="1" step="0.05" value="1">
+              <output id="draw-cn-end-val">1.00</output>
+            </label>
+            <p class="hint" id="draw-cn-hint">选一张图，生成的画面会沿用它的结构。</p>
+          </div>
+        </div>
         <label class="row">
           <span>尺寸</span>
           <select id="draw-size" class="sel">
@@ -346,8 +388,8 @@
 
 <script src="vendor/purify.min.js"></script>
 <script src="vendor/marked.min.js"></script>
-<script src="markdown-speech.js?v=5"></script>
-<script src="browser-tts.js?v=5"></script>
-<script src="app.js?v=5"></script>
+<script src="markdown-speech.js?v=7"></script>
+<script src="browser-tts.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>
