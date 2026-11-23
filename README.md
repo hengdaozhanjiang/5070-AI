@@ -179,9 +179,11 @@ python hub.py
 ### 下载 SD 模型（SDXL 等）
 
 ```bash
-python get-sd-model.py            # SDXL base 1.0（约 6.9GB）
-python get-sd-model.py --refiner  # 顺便下精修模型
-python get-sd-model.py sd15       # SD1.5 基础模型
+python get-sd-model.py               # SDXL base 1.0（约 6.9GB）
+python get-sd-model.py realvisxl     # RealVisXL V5.0 写实微调（约 6.5GB）
+python get-sd-model.py juggernaut-xl # Juggernaut XL v9 写实（约 6.6GB）
+python get-sd-model.py --refiner     # 顺便下精修模型
+python get-sd-model.py sd15          # SD1.5 基础模型
 ```
 
 模型会放进 `config.json` 里 SD 的 `models/Stable-diffusion` 目录，AUTOMATIC1111
@@ -196,6 +198,18 @@ python get-sd-model.py sd15       # SD1.5 基础模型
 | 切换模型 | 7.2 秒 |
 
 建议用 1024×1024、CFG 5 左右。软件会自动识别 SDXL 并套用这组参数，不用手动调。
+
+**SDXL 微调版实测**（RealVisXL V5.0，1024×1024、25 步）：
+
+| 模型 | 显存 | 出图耗时 | 切换耗时 |
+|---|---|---|---|
+| SDXL base 1.0 | 7.6 GB | 37 秒 | 7 秒 |
+| RealVisXL V5.0 | 7.8 GB | **17 秒** | 153 秒（首次加载权重） |
+
+RealVisXL 是通用写实里口碑很好的一档，人像和风景都能出，许可证允许商用。
+
+> ⚠️ **下载完模型要重启 SD 才能在界面里看到。** SD 在启动时扫描模型目录，
+> 之后新增的文件不会自动出现。界面上点「刷新」只重读列表，不会重新扫描磁盘。
 
 **三种下载方式**
 

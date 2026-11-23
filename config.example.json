@@ -81,6 +81,11 @@
         "display": "SDXL Base 1.0 · 官方",
         "note": "Stability 官方 SDXL 基础模型，原生 1024×1024。12GB 显存实测可用（占约 7.6GB）。",
         "tags": "官方 · 通用 · 1024"
+      },
+      "RealVisXL_V5.0_fp16": {
+        "display": "RealVisXL V5.0 · 写实",
+        "note": "RealVisXL V5.0 写实微调，约 6.5GB。通用写实最好用的一档，openrail++ 许可可商用。",
+        "tags": "写实 · 人像风景 · SDXL"
       }
     }
   },

@@ -43,7 +43,26 @@ PRESETS = {
         "file": "v1-5-pruned-emaonly.safetensors",
         "note": "SD1.5 基础模型，约 4GB",
     },
+    "realvisxl": {
+        "repo": "SG161222/RealVisXL_V5.0",
+        "file": "RealVisXL_V5.0_fp16.safetensors",
+        "note": "RealVisXL V5.0 写实微调，约 6.5GB。"
+                "通用写实最好用的一档：人像、风景都能出，"
+                "openrail++ 许可，可商用。",
+    },
+    "juggernaut-xl": {
+        "repo": "RunDiffusion/Juggernaut-XL-v9",
+        "file": "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
+        "note": "Juggernaut XL v9 写实微调，约 6.6GB。"
+                "偏人像，肤质和光影比 RealVis 更有摄影感。",
+    },
 }
+
+
+def safe(text) -> str:
+    """Printable on a GBK console. A stray symbol must not kill the retry loop."""
+    s = str(text)
+    return s.encode("gbk", errors="replace").decode("gbk")
 
 
 def default_dest() -> str:
@@ -88,11 +107,13 @@ def fetch(repo: str, name: str, dest_dir: str, endpoint: str,
 
         res = download.download(url, dest, on_progress=progress)
         if res.get("ok"):
-            print(f"  ✓ 完成 {download.human(res.get('bytes') or 0)}")
+            print(f"  [OK] 完成 {download.human(res.get('bytes') or 0)}")
             break
 
         msg = res.get("message", "")
-        print(f"  ✗ {msg}")
+        # the Windows console is GBK: a stray symbol here would raise and kill
+        # the retry loop before it gets a chance to resume
+        print(f"  [FAIL] {safe(msg)}")
         if "不完整" in msg or "中断" in msg:
             time.sleep(2)          # the .part file is kept, just resume
             continue
@@ -107,9 +128,9 @@ def fetch(repo: str, name: str, dest_dir: str, endpoint: str,
 
     check = download.verify(dest)
     if not check.get("ok"):
-        print(f"  ✗ 完整性检查失败：{check.get('message')}")
+        print(f"  [FAIL] 完整性检查失败：{safe(check.get('message'))}")
         return False
-    print(f"  ✓ 完整性检查通过")
+    print(f"  [OK] 完整性检查通过")
     return True
 
 
