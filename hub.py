@@ -1709,7 +1709,11 @@ def comfy_generate(payload: dict) -> dict:
     if not comfy_backend.is_up():
         return {"ok": False, "message": "ComfyUI 没有在运行，先启动它"}
 
+    # Fall back to the built-in list: without it, prompts that ask for heavy
+    # skin texture come back looking dirty at 1024 px.
     negative = str(payload.get("negative_prompt") or "").strip()
+    if not negative:
+        negative = comfy_backend.QWEN_NEGATIVE
     seed = int(payload.get("seed") or -1)
     steps = max(1, min(60, int(payload.get("steps") or comfy_backend.QWEN_STEPS)))
     cfg = float(payload.get("cfg_scale") or comfy_backend.QWEN_CFG)

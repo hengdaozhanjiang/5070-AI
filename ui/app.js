@@ -247,32 +247,43 @@ function showVersionInfo(hub) {
   const name = hub.name || '5070-AI';
   const ver = hub.version || '—';
   const port = hub.port || '—';
-  const bits = [
-    `${name} v${ver}`,
-    `hub 端口 ${port}`,
-    `界面标题 ${document.title || '—'}`,
-    '',
-    '更新代码后如果界面看着不对，',
-    '先按 Ctrl+F5 强制刷新一次。',
+
+  // Show what the running instance actually has, not just a version string.
+  // The useful question when something looks wrong is "is this the build I
+  // expect, and which services does it see?" - so answer that.
+  const sd = state.sd || {};
+  const comfy = state.comfy || {};
+  const tts = state.tts || {};
+  const up = [];
+  if (sd.up) up.push(`SD${sd.model ? ' · ' + String(sd.model).split(' [')[0].replace(/\.(safetensors|ckpt)$/i, '') : ''}`);
+  if (comfy.up) up.push(`Qwen${comfy.ready ? '' : '（缺模型）'}`);
+  if (tts.up) up.push(`TTS · ${(tts.voices || []).length} 音色`);
+  (state.models || []).filter(m => m.up).forEach(m => up.push(m.label));
+
+  const rows = [
+    ['版本', `v${ver}`],
+    ['hub 端口', String(port)],
+    ['正在运行', up.length ? up.join('、') : '没有服务在运行'],
+    ['配置问题', (state.configProblems || []).length
+      ? `${state.configProblems.length} 项（见侧栏顶部红条）` : '无'],
   ];
-  // 复用现有的 info 弹窗
+
+  const html = `
+    <table class="kbd-table" style="width:100%">
+      ${rows.map(([k, v]) => `<tr><td style="white-space:nowrap">${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('')}
+    </table>
+    <p style="margin:10px 0 0;font-size:12px;color:var(--text-dim);line-height:1.7">
+      更新代码后如果界面看着不对，先按 <b>Ctrl+F5</b> 强制刷新一次。
+    </p>`;
+
   if ($('#info-modal')) {
-    $('#info-title').textContent = '版本信息';
-    $('#info-body').innerHTML = bits
-      .map(t => `<div style="font-size:12.5px;line-height:1.8">${escapeHtml(t)}</div>`)
-      .join('');
+    $('#info-title').textContent = `${name} 版本信息`;
+    $('#info-body').innerHTML = html;
     $('#info-modal').classList.add('open');
   } else {
     toast(`${name} v${ver}`);
   }
 }
-
-/* Configuration problems, shown above the sidebar.
- *
- * Without this a broken config is silent: the cards just say "未启动", and the
- * user only finds out after clicking 启动 and reading a terse error. Surfacing
- * it on load turns a mystery into a checklist.
- */
 function renderConfigWarnings() {
   const box = $('#config-warn');
   if (!box) return;
@@ -1257,19 +1268,21 @@ async function qwenInChat(chat, text) {
   // workflow, so the hub derives it from elapsed time.
   const stopTrack = trackJob('comfy', prog, '正在画');
 
-  // Use whatever the panel is set to, exactly like the SD path does. The size
-  // was hard-coded to 1024x1024 here, so a custom size chosen in the panel was
-  // ignored and every Qwen picture came out square.
-  // A panel that was never opened still holds the SD default (832x832); Qwen is
-  // native at 1024, so fall back to that instead.
-  const panelTouched = $('#draw-w') && $('#draw-w').dataset.touched === '1';
-  const size = panelTouched ? currentSize() : '1024x1024';
+  // Use whatever the panel is set to, exactly like the SD path does.
+  //
+  // The decision must come from the SAVED settings, not from a flag on the DOM:
+  // dataset.touched vanished on reload, so after restarting the app every Qwen
+  // picture fell back to 1024x1024 and the custom size looked forgotten.
+  // drawSize === 'custom' is persisted, so it survives.
+  const saved = state.settings || {};
+  const customised = saved.drawSize === 'custom';
+  const size = customised ? currentSize() : '1024x1024';
   const r = await generateImage({
     prompt: text,
     negative: $('#draw-neg') ? $('#draw-neg').value : '',
     size,
     steps: $('#draw-steps') ? Number($('#draw-steps').value) || 8 : 8,
-    cfg: $('#draw-cfg') ? Number($('#draw-cfg').value) || 1 : 1,
+    cfg: $('#draw-cfg') ? Number($('#draw-cfg').value) || 1.5 : 1.5,
     seed: -1,
   });
   stopTrack();
@@ -2766,6 +2779,47 @@ async function switchDrawModel(name) {
 }
 
 /* Put the saved drawing draft back into the panel's fields. */
+/* Remember the size-related settings before something calls
+   applyFamilyDefaults(), which ends with saveDrawDraft() and would otherwise
+   overwrite them with the family defaults. */
+function snapshotSizeSettings() {
+  const s = state.settings || {};
+  // Also capture the live control values: applyFamilyDefaults rewrites both
+  // the settings object and the DOM, so neither alone is enough to restore.
+  return {
+    drawSize: s.drawSize, drawWidth: s.drawWidth,
+    drawHeight: s.drawHeight, drawCfg: s.drawCfg, drawSteps: s.drawSteps,
+    selValue: ($('#draw-size') || {}).value,
+    domW: ($('#draw-w') || {}).value,
+    domH: ($('#draw-h') || {}).value,
+    domCfg: ($('#draw-cfg') || {}).value,
+  };
+}
+
+function restoreSizeSettings(snap, opts) {
+  if (!snap) return;
+  const keepCfg = !(opts && opts.keepCfg === false);
+  const s = state.settings;
+  if (snap.drawSize != null) s.drawSize = snap.drawSize;
+  if (snap.drawWidth != null) s.drawWidth = snap.drawWidth;
+  if (snap.drawHeight != null) s.drawHeight = snap.drawHeight;
+  if (keepCfg) {
+    if (snap.drawCfg != null) s.drawCfg = snap.drawCfg;
+    if (snap.drawSteps != null) s.drawSteps = snap.drawSteps;
+  }
+  saveSettings();
+  // put the controls back too, otherwise the panel shows the defaults
+  const sel = $('#draw-size');
+  if (sel && snap.selValue) {
+    if ([...sel.options].some(o => o.value === snap.selValue)) sel.value = snap.selValue;
+  }
+  const w = $('#draw-w'); const h = $('#draw-h'); const c = $('#draw-cfg');
+  if (w && snap.domW) w.value = snap.domW;
+  if (h && snap.domH) h.value = snap.domH;
+  if (c && snap.domCfg) { c.value = snap.domCfg; }
+  syncSizeUi();
+}
+
 function restoreDrawDraft() {
   const s = state.settings || {};
   const set = (sel, val) => { const el = $(sel); if (el != null && val != null) el.value = val; };
@@ -2773,6 +2827,19 @@ function restoreDrawDraft() {
   // a saved size means the user chose it deliberately; the caller uses this
   // to decide whether the family defaults should override it
   const hadSize = s.drawSize != null;
+
+  // The saved preset may not exist in the current family's list (832x832 is an
+  // SD1.5 size, absent from the SDXL list). Assigning it would be dropped and
+  // leave the select blank, so add the option first.
+  const sel = $('#draw-size');
+  if (sel && s.drawSize && s.drawSize !== 'custom'
+      && ![...sel.options].some(o => o.value === s.drawSize)) {
+    const opt = document.createElement('option');
+    opt.value = s.drawSize;
+    const [ow, oh] = String(s.drawSize).split('x');
+    opt.textContent = `自定义 ${ow}×${oh}`;
+    sel.appendChild(opt);
+  }
   set('#draw-size', s.drawSize);
   set('#draw-w', s.drawWidth);
   set('#draw-h', s.drawHeight);
@@ -2849,10 +2916,25 @@ function openQwen(prefill) {
   // or preset) back into the controls; only when there is nothing to restore do
   // we fall back to Qwen's native 1024. Doing this in the other order meant the
   // saved numbers were overwritten every time the panel opened.
-  const hadDraft = prefill == null && restoreDrawDraft();
+  // The size <select> has to contain the options before a value can be set on
+  // it. restoreDrawDraft runs first, so build them here with Qwen's defaults
+  // and then let the saved value win.
+  // Only the SIZE is snapshotted/restored. cfg and steps belong to the backend:
+  // Qwen wants 8 / 1.5, and carrying SD's 28 / 7 over would both look wrong and
+  // reintroduce the dirty-skin problem cfg 1.0 has.
+  const sizeSnap = snapshotSizeSettings();
+  applyFamilyDefaults({ family: 'sdxl', defaults: { width: 1024, height: 1024,
+                                                   steps: 8, cfg: 1.5 } });
+  restoreSizeSettings(sizeSnap, { keepCfg: false });
+  const cfgEl = $('#draw-cfg');
+  if (cfgEl) { cfgEl.value = '1.5'; }
+  const cfgOut = $('#draw-cfg-val');
+  if (cfgOut) cfgOut.textContent = '1.5';
+  const stepsEl = $('#draw-steps');
+  if (stepsEl) stepsEl.value = '8';
+  let hadDraft = false;
+  if (prefill == null) hadDraft = restoreDrawDraft();
   if (!hadDraft) {
-    applyFamilyDefaults({ family: 'sdxl', defaults: { width: 1024, height: 1024,
-                                                     steps: 8, cfg: 1 } });
     const iw = $('#draw-w');
     const ih = $('#draw-h');
     if (iw) iw.value = 1024;
@@ -2860,7 +2942,7 @@ function openQwen(prefill) {
   }
 
   const note = $('#draw-family-note');
-  if (note) note.textContent = 'Qwen-Image 2.1 Turbo · 原生 1024×1024，8 步，CFG 1';
+  if (note) note.textContent = 'Qwen-Image 2.1 Turbo · 原生 1024×1024，8 步，CFG 1.5';
   if (prefill != null) $('#draw-prompt').value = prefill;
 
   // controlnet is an SD concept; hide it while Qwen drives
@@ -2892,17 +2974,17 @@ function openDraw(prefill) {
   renderControlnetModels();
   if (state.cnImage) showControlPreview(state.cnImage);
   const modal = $('#draw-modal');
-  // Restore the draft FIRST: applyFamilyDefaults() ends with saveDrawDraft(),
-  // so running it afterwards would write the family defaults back over the
-  // user's own numbers and quietly lose their custom size.
-  const hadDraft = prefill == null && restoreDrawDraft();
-  // size/cfg follow whichever checkpoint is loaded, but only when there was
-  // nothing to restore - otherwise the saved values win
-  if (!hadDraft) {
-    const cur = ((state.sd && state.sd.checkpoints) || []).find(
-      c => sameCheckpoint(c.name, sdCurrentName()));
-    applyFamilyDefaults(cur || null);
-  }
+  // Order matters twice over:
+  //   1. the <select> must contain the options before a value can be assigned,
+  //      so applyFamilyDefaults (which rebuilds them) has to come first;
+  //   2. it ends with saveDrawDraft(), so the saved draft has to be re-applied
+  //      afterwards or the family defaults would overwrite the user's numbers.
+  const sizeSnap = snapshotSizeSettings();
+  const cur = ((state.sd && state.sd.checkpoints) || []).find(
+    c => sameCheckpoint(c.name, sdCurrentName()));
+  applyFamilyDefaults(cur || null);
+  restoreSizeSettings(sizeSnap);
+  if (prefill == null) restoreDrawDraft();
   if (prefill != null) $('#draw-prompt').value = prefill;
   renderDrawCheckpoints();
   bindSizeInputs();
@@ -3203,14 +3285,13 @@ const Viewer = {
   bound: false,
 };
 
-function viewerApply() {
+function viewerApply(drag) {
   const img = $('#viewer-img');
   const label = $('#viewer-zoom');
   if (!img || !Viewer.natW) return;
   const px = Math.max(1, Math.round(Viewer.natW * Viewer.scale));
   img.style.width = px + 'px';
   img.style.height = 'auto';
-  img.classList.toggle('crisp', Viewer.scale >= 0.99);
   // 100% means one image pixel per screen pixel, which is what people expect
   // from a viewer; the fitted size is whatever percentage that works out to.
   if (label) label.textContent = Math.round(Viewer.scale * 100) + '%';
@@ -3220,35 +3301,47 @@ function viewerApply() {
 function viewerFitScale() {
   const stage = $('#viewer-stage');
   if (!stage || !Viewer.natW) return 1;
-  const pad = 24;
+  const pad = 32;
   const aw = Math.max(80, stage.clientWidth - pad);
   const ah = Math.max(80, stage.clientHeight - pad);
   return Math.min(aw / Viewer.natW, ah / Viewer.natH, 1);
 }
 
-function viewerZoom(factor, originEvent) {
+/* Zoom around a point in the stage's coordinate space.
+
+   The old version used the stage's scroll offset directly, but after the image
+   grows the scroll range changes, so the anchor drifted and the picture jumped
+   under the cursor. This keeps the point under the cursor at the same screen
+   position by solving for the scroll offset after the resize. */
+function viewerZoomAt(factor, clientX, clientY) {
   const stage = $('#viewer-stage');
   const img = $('#viewer-img');
-  if (!stage || !img) return;
+  if (!stage || !img || !Viewer.natW) return;
+
   const before = Viewer.scale;
-  Viewer.scale = Math.max(0.1, Math.min(8, Viewer.scale * factor));
-  if (Math.abs(before - Viewer.scale) < 1e-4) return;
+  const next = Math.max(0.1, Math.min(8, before * factor));
+  if (Math.abs(next - before) < 1e-4) return;
+
+  const r = stage.getBoundingClientRect();
+  // position of the cursor inside the scrollable content
+  const px = clientX - r.left + stage.scrollLeft;
+  const py = clientY - r.top + stage.scrollTop;
+
+  Viewer.scale = next;
   viewerApply();
 
-  // keep the point under the cursor fixed while zooming
-  if (originEvent) {
-    const r = stage.getBoundingClientRect();
-    const cx = originEvent.clientX - r.left;
-    const cy = originEvent.clientY - r.top;
-    const ratio = Viewer.scale / before;
-    stage.scrollLeft = (stage.scrollLeft + cx) * ratio - cx;
-    stage.scrollTop = (stage.scrollTop + cy) * ratio - cy;
-  }
+  // after resizing, put the same content point back under the cursor
+  const ratio = Viewer.scale / before;
+  stage.scrollLeft = px * ratio - (clientX - r.left);
+  stage.scrollTop = py * ratio - (clientY - r.top);
 }
 
-function viewerSetScale(scale) {
-  Viewer.scale = Math.max(0.1, Math.min(8, scale));
-  viewerApply();
+/* Zoom around the centre of the viewport (buttons, keyboard). */
+function viewerZoom(factor) {
+  const stage = $('#viewer-stage');
+  if (!stage) return;
+  const r = stage.getBoundingClientRect();
+  viewerZoomAt(factor, r.left + r.width / 2, r.top + r.height / 2);
 }
 
 function viewerFit() {
@@ -3259,45 +3352,53 @@ function viewerFit() {
 }
 
 function viewerActual() {
-  viewerSetScale(1);
   const stage = $('#viewer-stage');
-  if (stage) {
-    // centre the 1:1 view on the middle of the picture
-    stage.scrollLeft = Math.max(0, (Viewer.natW - stage.clientWidth) / 2);
-    stage.scrollTop = Math.max(0, (Viewer.natH - stage.clientHeight) / 2);
-  }
+  if (!stage) return;
+  Viewer.scale = 1;
+  viewerApply();
+  // centre the 1:1 view on the middle of the picture
+  stage.scrollLeft = Math.max(0, (Viewer.natW - stage.clientWidth) / 2);
+  stage.scrollTop = Math.max(0, (Viewer.natH - stage.clientHeight) / 2);
 }
 
 function bindViewerOnce() {
   if (Viewer.bound) return;
   Viewer.bound = true;
   const stage = $('#viewer-stage');
+  const img = $('#viewer-img');
   const v = $('#viewer');
-  if (!stage || !v) return;
+  if (!stage || !img || !v) return;
 
   $('#viewer-zoom-in').onclick = () => viewerZoom(1.25);
   $('#viewer-zoom-out').onclick = () => viewerZoom(1 / 1.25);
   $('#viewer-fit').onclick = () => viewerFit();
   $('#viewer-actual').onclick = () => viewerActual();
 
-  // wheel zooms; ctrl is not required so a plain scroll wheel works
+  // Wheel zooms around the cursor. A trackpad fires many small deltas, so the
+  // step is derived from deltaY instead of a fixed factor - otherwise one
+  // gesture jumps straight to 800%.
   stage.addEventListener('wheel', ev => {
     ev.preventDefault();
-    viewerZoom(ev.deltaY < 0 ? 1.15 : 1 / 1.15, ev);
+    const step = Math.min(0.25, Math.abs(ev.deltaY) / 400);
+    const factor = ev.deltaY < 0 ? 1 + step : 1 / (1 + step);
+    viewerZoomAt(factor, ev.clientX, ev.clientY);
   }, { passive: false });
 
-  // drag to pan
+  // Drag to pan. Pointer events cover mouse, pen and touch with one path.
   let dragging = false;
   let sx = 0, sy = 0, sl = 0, st = 0, moved = 0;
-  stage.addEventListener('mousedown', ev => {
+
+  stage.addEventListener('pointerdown', ev => {
     if (ev.button !== 0) return;
     dragging = true;
     moved = 0;
     sx = ev.clientX; sy = ev.clientY;
     sl = stage.scrollLeft; st = stage.scrollTop;
     stage.classList.add('dragging');
+    stage.setPointerCapture(ev.pointerId);
   });
-  window.addEventListener('mousemove', ev => {
+
+  stage.addEventListener('pointermove', ev => {
     if (!dragging) return;
     const dx = ev.clientX - sx;
     const dy = ev.clientY - sy;
@@ -3305,30 +3406,56 @@ function bindViewerOnce() {
     stage.scrollLeft = sl - dx;
     stage.scrollTop = st - dy;
   });
-  window.addEventListener('mouseup', () => {
+
+  const endDrag = ev => {
+    if (!dragging) return;
     dragging = false;
     stage.classList.remove('dragging');
-  });
+    try { stage.releasePointerCapture(ev.pointerId); } catch { /* already gone */ }
+  };
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
 
-  // double click toggles between fitted and 1:1
-  $('#viewer-img').addEventListener('dblclick', ev => {
+  // double click toggles between fitted and 1:1, centred on the click point
+  img.addEventListener('dblclick', ev => {
     ev.stopPropagation();
-    if (Viewer.scale >= 0.99) viewerFit();
-    else viewerActual();
+    if (Math.abs(Viewer.scale - 1) < 0.02) {
+      viewerFit();
+    } else {
+      const r = stage.getBoundingClientRect();
+      Viewer.scale = 1;
+      viewerApply();
+      // zoom in towards the point that was double-clicked
+      const px = ev.clientX - r.left + stage.scrollLeft;
+      const py = ev.clientY - r.top + stage.scrollTop;
+      stage.scrollLeft = px - (ev.clientX - r.left);
+      stage.scrollTop = py - (ev.clientY - r.top);
+    }
   });
 
-  // click on the empty area closes, but a drag must not count as a click
+  // A click on the backdrop closes; a drag must not count. `moved` is reset
+  // when the drag starts, so a pan ending over the backdrop will not close it.
   stage.addEventListener('click', ev => {
-    if (ev.target.id !== 'viewer-img' && moved < 6) closeViewer();
-    moved = 0;
+    if (moved >= 6) return;
+    if (ev.target === img) return;
+    closeViewer();
   });
 
   // keep the fitted size correct when the window changes
   window.addEventListener('resize', () => {
-    if (!Viewer.open) return;
+    if (!Viewer.open || !Viewer.natW) return;
     const wasFitted = Math.abs(Viewer.scale - Viewer.fitScale) < 0.02;
     Viewer.fitScale = viewerFitScale();
     if (wasFitted) { Viewer.scale = Viewer.fitScale; viewerApply(); }
+  });
+
+  // keyboard: +/-/0/1 are handy once the viewer is open
+  window.addEventListener('keydown', ev => {
+    if (!Viewer.open) return;
+    if (ev.key === '+' || ev.key === '=') { ev.preventDefault(); viewerZoom(1.25); }
+    else if (ev.key === '-') { ev.preventDefault(); viewerZoom(1 / 1.25); }
+    else if (ev.key === '0') { ev.preventDefault(); viewerFit(); }
+    else if (ev.key === '1') { ev.preventDefault(); viewerActual(); }
   });
 }
 
@@ -3341,25 +3468,39 @@ function openViewer(src) {
   const btn = $('#viewer-save');
   if (btn) { btn.disabled = false; btn.textContent = '保存到本地'; }
 
-  // measure before showing so the fit calculation has real numbers
-  img.onload = () => {
-    Viewer.natW = img.naturalWidth || 1024;
-    Viewer.natH = img.naturalHeight || 1024;
-    Viewer.fitScale = viewerFitScale();
-    Viewer.scale = Viewer.fitScale;
-    viewerApply();
-  };
-  img.src = src;
-  if (img.complete && img.naturalWidth) img.onload();
+  // reset scroll so the next picture starts centred, not at the old offset
+  const stage = $('#viewer-stage');
+  if (stage) { stage.scrollLeft = 0; stage.scrollTop = 0; }
 
+  // Show first, then measure. A hidden element reports zero size, and the fit
+  // scale depends on the stage's real dimensions.
   v.classList.add('open');
   Viewer.open = true;
-  // the stage only has a size once it is displayed
-  requestAnimationFrame(() => {
+
+  const fit = () => {
+    // naturalWidth is 0 until the bitmap is decoded; a canvas data URL can be
+    // "complete" but still measure 0 on the first frame, which made the zoom
+    // math divide by zero and left the picture unscaled.
+    Viewer.natW = img.naturalWidth || img.width || 1024;
+    Viewer.natH = img.naturalHeight || img.height || 1024;
     Viewer.fitScale = viewerFitScale();
     Viewer.scale = Viewer.fitScale;
     viewerApply();
-  });
+    if (stage) { stage.scrollLeft = 0; stage.scrollTop = 0; }
+  };
+  Viewer._fit = fit;
+
+  img.onload = () => requestAnimationFrame(fit);
+  img.onerror = () => { Viewer.natW = Viewer.natH = 1024; fit(); };
+  img.src = src;
+
+  // decode() resolves once the bitmap is ready, which is the reliable point to
+  // measure; fall back to the load event for browsers without it.
+  if (img.decode) {
+    img.decode().then(() => requestAnimationFrame(fit)).catch(() => {});
+  } else if (img.complete && img.naturalWidth) {
+    requestAnimationFrame(fit);
+  }
 }
 
 function closeViewer() {
@@ -3529,13 +3670,12 @@ function bind() {
       if (m._resolve) m._resolve(false);
     }
   }));
-  // clicking the backdrop closes; clicking the picture or the toolbar does not.
-  // The stage also has its own handler for this, but keeping the outer one means
-  // a click on the padding still closes the viewer.
+  // The stage handles its own click-to-close (it has to distinguish a click
+  // from the end of a drag). This outer handler only covers the padding around
+  // the stage, which the stage itself never sees.
   $('#viewer').onclick = ev => {
     if (ev.target.closest('.viewer-bar')) return;
-    if (ev.target.id === 'viewer-img') return;
-    if (ev.target.id === 'viewer-stage') return;   // handled by the pan logic
+    if (ev.target.closest('.viewer-stage')) return;
     closeViewer();
   };
   $('#viewer-save').onclick = saveViewerImage;
@@ -4119,6 +4259,9 @@ window.ChengXin = {
   syncSizeUi,
   openViewer,
   closeViewer,
+  snapshotSizeSettings,
+  restoreSizeSettings,
+  restoreDrawDraft,
   get viewer() { return Viewer; },
   send,
   isQwenThread,

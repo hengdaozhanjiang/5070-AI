@@ -1323,36 +1323,49 @@ html[data-theme="light"] .code-card { background: #f7f9fd; }
 }
 .btn-ghost:hover { color: var(--text); background: var(--panel); }
 
+/* Full-viewport overlay, no padding: the stage needs every pixel it can get
+   so a zoomed picture has room to pan. The bar keeps its own spacing. */
 .viewer {
   position: fixed;
   inset: 0;
   display: none;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 0;
   z-index: 60;
-  background: rgba(0, 0, 0, .88);
-  padding: 24px;
+  background: rgba(0, 0, 0, .92);
+  padding: 0;
 }
 .viewer.open { display: flex; }
 
 /* The stage is the scroll container: when the picture is zoomed past the
    viewport you pan by dragging it or by scrolling here. */
+/* The stage scrolls in both directions. Do NOT use flex centring here:
+   with a child wider than the container, flex puts the overflow on the start
+   side and scrollLeft can never reach it, so the top-left of a zoomed picture
+   becomes unreachable. A plain block with an inline-block child and auto
+   margins centres when it fits and scrolls correctly when it does not. */
 .viewer-stage {
   flex: 1 1 auto;
-  min-height: 0;
+  /* Without a floor the stage collapses to a sliver while the image is still
+     loading (its height is 0), and the bar jumps to the top of the screen. */
+  min-height: 240px;
   width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: auto;
   cursor: grab;
+  text-align: center;
+  scrollbar-width: thin;
 }
 .viewer-stage.dragging { cursor: grabbing; }
+.viewer-stage.dragging img { pointer-events: none; }
+/* vertical centring that still allows scrolling past the edges */
+.viewer-stage > img {
+  margin: auto;
+}
 
 .viewer img {
-  display: block;
+  display: inline-block;
   /* width/height are set inline by the zoom code; leave the rest to CSS so
      the transform and pixel size do not fight each other */
   max-width: none;
@@ -1378,7 +1391,11 @@ html[data-theme="light"] .code-card { background: #f7f9fd; }
 .viewer-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 16px 14px;
+  background: rgba(0, 0, 0, .35);
 }
 .viewer-hint { color: #8b949e; font-size: 11.5px; }
 .viewer-bar button {

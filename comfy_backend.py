@@ -32,10 +32,28 @@ QWEN_UNET = "qwen-image-2.1-turbo-Q4_K_M.gguf"
 QWEN_CLIP = r"text_encoders\qwen3vl_8b_w4a8.safetensors"
 QWEN_VAE = "qwen_image_2.1_vae_bf16.safetensors"
 
-# Turbo is distilled: few steps, low cfg. These are the values the model was
-# trained for; higher cfg makes it look over-cooked.
+# Turbo is distilled: it wants few steps and a low cfg.
+#
+# cfg 1.0 is what the model card suggests, but it disables the negative branch
+# entirely - guidance is skipped when cfg <= 1 - so prompts that ask for heavy
+# skin texture ("detailed skin pores", "every wrinkle") come back looking dirty
+# and there is no way to push back.
+#
+# 1.5 is the measured sweet spot: the negative prompt takes effect, skin looks
+# clean, and it has not yet gone plastic the way cfg 3 does. Cost is ~8 s more
+# per picture on a 5070, which is worth it.
 QWEN_STEPS = 8
-QWEN_CFG = 1.0
+QWEN_CFG = 1.5
+
+# Applied when the caller sends no negative prompt.
+#
+# Asking for "detailed skin pores" or similar at 1024 px makes Qwen-Image draw
+# texture it cannot resolve, which reads as dirty/noisy skin. These words push
+# back on that without touching the positive prompt the user wrote.
+QWEN_NEGATIVE = (
+    "noisy, grainy, dirty, blotchy, jpeg artifacts, oversharpened, "
+    "plastic skin, deformed, low quality, blurry"
+)
 
 _state = {"up": False, "loading": False, "pid": 0, "error": None}
 
