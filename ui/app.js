@@ -1286,7 +1286,7 @@ async function qwenInChat(chat, text) {
   // drawSize === 'custom' is persisted, so it survives.
   const saved = state.settings || {};
   const customised = saved.drawSize === 'custom';
-  const size = customised ? currentSize() : '1024x1024';
+  const size = customised ? currentSize() : '2048x1152';
   const r = await generateImage({
     prompt: text,
     negative: $('#draw-neg') ? $('#draw-neg').value : '',
@@ -2605,17 +2605,17 @@ function currentSize() {
 
 /* Round to a multiple of 8 and clamp to what the services accept. */
 function snapSize(n) {
-  if (!isFinite(n) || n <= 0) return 1024;
-  // Each backend clamps on its own; matching those numbers here keeps the
-  // picture the size the user asked for instead of silently shrinking it.
+  if (!isFinite(n) || n <= 0) return 1152;
+  // 16, not 8: the latent is half the target and must be a multiple of 8, so a
+  // target of 1920x1080 would silently come back as 1920x1088.
   const max = maxSizeForBackend();
-  return Math.max(256, Math.min(max, Math.round(n / 8) * 8));
+  return Math.max(256, Math.min(max, Math.round(n / 16) * 16));
 }
 
-/* The largest edge the current backend accepts. SD clamps at 1536, the
-   ComfyUI/Qwen path at 2048 - asking for more would be silently reduced. */
+/* The largest edge the current backend accepts. */
 function maxSizeForBackend() {
-  return (comfyReady() || state.drawBackend === 'comfy') ? 2048 : 1536;
+  // Qwen handles 2K comfortably on 12 GB; SD's WebUI clamps much lower.
+  return (comfyReady() || state.drawBackend === 'comfy') ? 4096 : 1536;
 }
 
 /* Show or hide the two number inputs and explain any problem with the values. */
@@ -2740,17 +2740,27 @@ function rebuildSizeOptions(fam, defaults) {
   const sel = $('#draw-size');
   if (!sel) return;
   const cur = sel.value;
+  // Ordered high resolution first and defaulted to the top entry: Qwen-Image is
+  // natively high-res, and starting at 512/832 was leaving quality on the table.
+  //
+  // Every value must be divisible by 16. The latent is half the target size and
+  // must itself be a multiple of 8, so a target of 1920x1080 produces 1920x1088
+  // - the requested size has to survive that rounding.
   const base = fam === 'sdxl'
-    ? [['1024x1024', '方图 1024×1024（SDXL 原生）'],
-       ['1152x896', '横版 1152×896'],
-       ['896x1152', '竖版 896×1152'],
-       ['1216x832', '宽屏 1216×832'],
-       ['768x768', '小图 768×768']]
-    : [['832x832', '方图 832×832'],
-       ['768x1024', '竖版 768×1024'],
-       ['1024x768', '横版 1024×768'],
-       ['512x512', '小图 512×512'],
-       ['640x896', '竖版 640×896']];
+    ? [['2048x1152', '2K 宽屏 2048×1152'],
+       ['1920x1088', '1080p 宽屏 1920×1088'],
+       ['1280x720', '720p 宽屏 1280×720'],
+       ['1088x1920', '竖屏 1088×1920'],
+       ['1328x1328', '方形 1328×1328'],
+       ['1024x1024', '方形 1024×1024'],
+       ['896x1152', '竖版 896×1152']]
+    : [['2048x1152', '2K 宽屏 2048×1152'],
+       ['1920x1088', '1080p 宽屏 1920×1088'],
+       ['1280x720', '720p 宽屏 1280×720'],
+       ['1088x1920', '竖屏 1088×1920'],
+       ['1328x1328', '方形 1328×1328'],
+       ['1024x1024', '方形 1024×1024'],
+       ['1024x768', '横版 1024×768']];
   // 「自定义」stays available at the end, so a user who typed their own numbers
   // does not lose that choice just because the model family changed
   sel.innerHTML = base.map(([v, label], i) =>
@@ -2847,9 +2857,12 @@ function restoreDrawDraft() {
   const s = state.settings || {};
   const set = (sel, val) => { const el = $(sel); if (el != null && val != null) el.value = val; };
   set('#draw-neg', s.drawNegative);
-  // a saved size means the user chose it deliberately; the caller uses this
-  // to decide whether the family defaults should override it
-  const hadSize = s.drawSize != null;
+  // A saved size means the user chose it deliberately. The factory defaults
+  // ('832x832' from the SD era) do not count: restoring them would override the
+  // 2K that applyFamilyDefaults just set.
+  const userSized = s.drawSize != null && s.drawSize !== '832x832'
+    && !(s.drawWidth === 832 && s.drawHeight === 832);
+  const hadSize = userSized;
 
   // The saved preset may not exist in the current family's list (832x832 is an
   // SD1.5 size, absent from the SDXL list). Assigning it would be dropped and
@@ -2863,9 +2876,11 @@ function restoreDrawDraft() {
     opt.textContent = `自定义 ${ow}×${oh}`;
     sel.appendChild(opt);
   }
-  set('#draw-size', s.drawSize);
-  set('#draw-w', s.drawWidth);
-  set('#draw-h', s.drawHeight);
+  if (userSized) {
+    set('#draw-size', s.drawSize);
+    set('#draw-w', s.drawWidth);
+    set('#draw-h', s.drawHeight);
+  }
   set('#draw-steps', s.drawSteps);
   set('#draw-cfg', s.drawCfg);
   set('#draw-seed', s.drawSeed);
@@ -2946,7 +2961,7 @@ function openQwen(prefill) {
   // Qwen wants 8 / 1.5, and carrying SD's 28 / 7 over would both look wrong and
   // reintroduce the dirty-skin problem cfg 1.0 has.
   const sizeSnap = snapshotSizeSettings();
-  applyFamilyDefaults({ family: 'sdxl', defaults: { width: 1024, height: 1024,
+  applyFamilyDefaults({ family: 'sdxl', defaults: { width: 2048, height: 1152,
                                                    steps: 8, cfg: 1.5 } });
   restoreSizeSettings(sizeSnap, { keepCfg: false });
   const cfgEl = $('#draw-cfg');
@@ -2965,7 +2980,7 @@ function openQwen(prefill) {
   }
 
   const note = $('#draw-family-note');
-  if (note) note.textContent = 'Qwen-Image 2.1 Turbo · 原生 1024×1024，8 步，CFG 1.5';
+  if (note) note.textContent = 'Qwen-Image 2.1 Turbo · 默认 2K，8 步，CFG 1.5';
   if (prefill != null) $('#draw-prompt').value = prefill;
 
   // controlnet is an SD concept; hide it while Qwen drives
@@ -3218,7 +3233,7 @@ async function generateImage(opts = {}) {
       toast('Qwen 图像没就绪', 'err');
       return null;
     }
-    const [qw, qh] = String(opts.size || '1024x1024').split('x').map(Number);
+    const [qw, qh] = String(opts.size || '2048x1152').split('x').map(Number);
     const rq = await fetch('/api/comfy/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

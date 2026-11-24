@@ -1720,8 +1720,9 @@ def comfy_generate(payload: dict) -> dict:
     seed = int(payload.get("seed") or -1)
     steps = max(1, min(60, int(payload.get("steps") or comfy_backend.QWEN_STEPS)))
     cfg = float(payload.get("cfg_scale") or comfy_backend.QWEN_CFG)
-    width = max(256, min(2048, int(payload.get("width") or 1024)))
-    height = max(256, min(2048, int(payload.get("height") or 1024)))
+    # default to Qwen's native high resolution rather than 1024
+    width = max(256, min(4096, int(payload.get("width") or comfy_backend.QWEN_WIDTH)))
+    height = max(256, min(4096, int(payload.get("height") or comfy_backend.QWEN_HEIGHT)))
 
     job_begin("comfy", label=prompt[:40])
 

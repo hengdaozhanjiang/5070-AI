@@ -45,6 +45,13 @@ QWEN_VAE = "qwen_image_2.1_vae_bf16.safetensors"
 QWEN_STEPS = 8
 QWEN_CFG = 1.5
 
+# Qwen-Image is natively high resolution; 1024 was a needless downgrade.
+#
+# Both values must be divisible by 16: the latent is half the target and must
+# itself be a multiple of 8, so 1920x1080 would come out 1920x1088.
+QWEN_WIDTH = 2048
+QWEN_HEIGHT = 1152
+
 # Applied when the caller sends no negative prompt.
 #
 # Asking for "detailed skin pores" or similar at 1024 px makes Qwen-Image draw
@@ -241,7 +248,7 @@ def mark_warm(value: bool = True) -> None:
 
 def build_workflow(prompt: str, negative: str = "", seed: int = -1,
                    steps: int = QWEN_STEPS, cfg: float = QWEN_CFG,
-                   width: int = 1024, height: int = 1024) -> dict:
+                   width: int = QWEN_WIDTH, height: int = QWEN_HEIGHT) -> dict:
     """The node graph Qwen-Image 2.1 expects.
 
     TextEncodeQwenImage21 also emits the latent, so there is no separate
@@ -254,10 +261,11 @@ def build_workflow(prompt: str, negative: str = "", seed: int = -1,
         seed = int(time.time() * 1000) % (2 ** 32)
     used_seed = seed
 
-    # The latent is half the target size, so an odd value would round and the
-    # picture would not match what was asked for. Snap to a multiple of 8.
-    width = max(256, min(2048, (int(width) // 8) * 8))
-    height = max(256, min(2048, (int(height) // 8) * 8))
+    # The latent is half the target and must be a multiple of 8, so the target
+    # has to be a multiple of 16. Snapping to 8 would let 1080 through and the
+    # result would silently come back as 1088.
+    width = max(256, min(QWEN_WIDTH * 2, (int(width) // 16) * 16))
+    height = max(256, min(QWEN_HEIGHT * 2, (int(height) // 16) * 16))
 
     # The graph follows ComfyUI's own Qwen-Image template: a plain
     # EmptySD3LatentImage carries the requested width and height directly.
