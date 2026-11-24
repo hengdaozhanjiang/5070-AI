@@ -1482,3 +1482,52 @@ html[data-theme="light"] .code-card { background: #f7f9fd; }
 }
 .size-note.bad { color: #ff8a5c; }
 .size-note.warn { color: #e8c15a; }
+
+/* --- quick generation settings in the composer --------------------------- */
+/* Only visible while a drawing backend is up; the composer is a prompt box in
+   that mode, so the parameters belong next to it rather than behind a modal. */
+.quick-gen {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.quick-gen .sel {
+  height: 26px;
+  padding: 0 6px;
+  font-size: 11.5px;
+  max-width: 110px;
+}
+.quick-gen .qg-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11.5px;
+}
+.quick-gen .qg-custom input {
+  width: 56px;
+  height: 26px;
+  padding: 0 4px;
+  font-size: 11.5px;
+  text-align: center;
+}
+.quick-gen .qg-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.quick-gen .qg-field input {
+  width: 46px;
+  height: 26px;
+  padding: 0 4px;
+  font-size: 11.5px;
+  text-align: center;
+}
+/* below this width the bar would wrap; hide the numbers and keep the size */
+@media (max-width: 980px) {
+  .quick-gen .qg-field { display: none; }
+}

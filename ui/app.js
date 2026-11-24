@@ -2083,6 +2083,7 @@ function renderAll() {
   renderTtsCard();
   renderComfyCard();
   renderServicesSummary();
+  renderQuickGen();
   renderConvList();
   renderChips();
   renderThread();
@@ -2121,6 +2122,7 @@ async function pollState(force = false) {
     renderTtsCard();
     renderComfyCard();
     renderServicesSummary();
+    renderQuickGen();
     renderChips();
     // an empty conversation shows a different starter panel depending on which
     // service is up, so redraw whenever either flag flips
@@ -2605,6 +2607,138 @@ function applyFamilyDefaults(hit) {
    Presets keep the old single-value shape; 「自定义」 reads the two number
    inputs. Always returns something the backend accepts: multiples of 8 within
    the range it clamps to, because odd numbers make SD produce smeared edges. */
+/* ---- quick generation settings in the composer ----------------------------
+
+   Same values as the drawing panel, just visible without opening it. The two
+   are kept in sync in both directions so there is no second source of truth:
+   editing here writes through to the panel and to the saved draft. */
+function bindQuickGen() {
+  const box = $('#quick-gen');
+  if (!box || box._bound) return;
+  box._bound = true;
+
+  $('#qg-size').addEventListener('change', ev => {
+    const v = ev.target.value;
+    const sizeSel = $('#draw-size');
+    if (sizeSel) {
+      if (![...sizeSel.options].some(o => o.value === v)) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        const [a, b] = v.split('x');
+        opt.textContent = `自定义 ${a}×${b}`;
+        sizeSel.appendChild(opt);
+      }
+      sizeSel.value = v;
+      sizeSel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (v === 'custom') {
+      const w = $('#draw-w');
+      const h = $('#draw-h');
+      if (w) $('#qg-w').value = w.value;
+      if (h) $('#qg-h').value = h.value;
+    }
+    renderQuickGen();
+    saveDrawDraft();
+  });
+
+  ['#qg-w', '#qg-h'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const sizeSel = $('#draw-size');
+      // typing a width/height means the size is custom: without this the panel
+      // stayed on a preset and currentSize() kept returning the preset value
+      if (sizeSel && sizeSel.value !== 'custom') {
+        sizeSel.value = 'custom';
+        sizeSel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const target = id === '#qg-w' ? $('#draw-w') : $('#draw-h');
+      if (target) {
+        target.value = el.value;
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      saveDrawDraft();
+    });
+  });
+
+  ['#qg-steps', '#qg-cfg'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const target = id === '#qg-steps' ? $('#draw-steps') : $('#draw-cfg');
+      if (target) {
+        target.value = el.value;
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      saveDrawDraft();
+    });
+  });
+}
+
+/* Mirror the panel state into the composer controls.
+
+   Hidden entirely unless a drawing backend is running, because in chat mode
+   these numbers mean nothing. */
+function renderQuickGen() {
+  const box = $('#quick-gen');
+  if (!box) return;
+  const drawing = comfyReady() || sdReady() || state.drawBackend === 'comfy';
+  box.hidden = !drawing;
+  if (!drawing) return;
+
+  // The panel controls start at the factory defaults (26 steps / cfg 7) until a
+  // drawing panel has been opened. Seed them once so the composer shows what
+  // will actually be used.
+  const panelSteps = $('#draw-steps');
+  const panelCfg = $('#draw-cfg');
+  if (panelSteps && panelCfg && !state._qwenSeeded && comfyReady()) {
+    // Build the size options first: a saved 'custom' cannot be assigned to a
+    // select that has no such option yet, which left the composer stuck.
+    applyFamilyDefaults({ family: 'sdxl', defaults: QWEN_DEFAULTS });
+    restoreDrawDraft();
+    // restoreDrawDraft also brings back steps/cfg from the saved draft, which
+    // are SD-era numbers. In Qwen mode those two belong to the backend, so set
+    // them last and let them win.
+    applyQwenDefaults();
+    state._qwenSeeded = true;
+  }
+
+  const size = currentSize();
+  const sel = $('#qg-size');
+  const panelSel = $('#draw-size');
+  if (sel) {
+    // Respect the panel's explicit 「自定义」 even when the numbers happen to
+    // match a preset - otherwise typing 2048x1152 flipped the dropdown back to
+    // the preset and hid the number inputs mid-edit.
+    const panelIsCustom = panelSel && panelSel.value === 'custom';
+    if (panelIsCustom) {
+      sel.value = 'custom';
+    } else if ([...sel.options].some(o => o.value === size)) {
+      sel.value = size;
+    } else {
+      sel.value = 'custom';
+    }
+  }
+
+  const isCustom = sel && sel.value === 'custom';
+  const cbox = $('#qg-custom');
+  if (cbox) cbox.hidden = !isCustom;
+  if (isCustom) {
+    const [w, h] = size.split('x');
+    const qw = $('#qg-w');
+    const qh = $('#qg-h');
+    if (qw && document.activeElement !== qw) qw.value = w;
+    if (qh && document.activeElement !== qh) qh.value = h;
+  }
+
+  const steps = $('#qg-steps');
+  const cfg = $('#qg-cfg');
+  const ps = $('#draw-steps');
+  const pc = $('#draw-cfg');
+  if (steps && ps && document.activeElement !== steps) steps.value = ps.value;
+  if (cfg && pc && document.activeElement !== cfg) cfg.value = pc.value;
+}
+
 function currentSize() {
   const sel = $('#draw-size');
   // 832x832 is the SD-era factory default; when Qwen drives, 2K is the fallback.
@@ -4310,6 +4444,7 @@ function bindSettings() {
 }
 
 async function boot() {
+  bindQuickGen();
   bind();
   applyTheme();
   renderAll();

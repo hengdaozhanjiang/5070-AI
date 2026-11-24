@@ -105,6 +105,29 @@
           </button>
           <span class="hint" id="hint">9B 快答 · 35B 深思</span>
           <span class="grow"></span>
+          <!-- Quick generation settings, right in the composer: changing these
+               used to require opening the drawing panel or starting a new chat. -->
+          <span class="quick-gen" id="quick-gen" hidden>
+            <select id="qg-size" class="sel" title="出图尺寸">
+              <option value="2048x1152">2K 宽屏</option>
+              <option value="1920x1088">1080p</option>
+              <option value="1280x720">720p</option>
+              <option value="1088x1920">竖屏</option>
+              <option value="1328x1328">方形</option>
+              <option value="custom">自定义…</option>
+            </select>
+            <span class="qg-custom" id="qg-custom" hidden>
+              <input type="number" id="qg-w" min="256" max="4096" step="16" title="宽">
+              <span>×</span>
+              <input type="number" id="qg-h" min="256" max="4096" step="16" title="高">
+            </span>
+            <label class="qg-field" title="采样步数（Turbo 建议 8）">
+              <span>步数</span><input type="number" id="qg-steps" min="1" max="60">
+            </label>
+            <label class="qg-field" title="CFG（Turbo 建议 1.0）">
+              <span>CFG</span><input type="number" id="qg-cfg" min="0.5" max="15" step="0.5">
+            </label>
+          </span>
           <button class="send" id="send">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 12h15"/><path d="m13 6 6 6-6 6"/>
