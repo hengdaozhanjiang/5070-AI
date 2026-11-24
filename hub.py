@@ -1720,9 +1720,12 @@ def comfy_generate(payload: dict) -> dict:
     seed = int(payload.get("seed") or -1)
     steps = max(1, min(60, int(payload.get("steps") or comfy_backend.QWEN_STEPS)))
     cfg = float(payload.get("cfg_scale") or comfy_backend.QWEN_CFG)
-    # default to Qwen's native high resolution rather than 1024
-    width = max(256, min(4096, int(payload.get("width") or comfy_backend.QWEN_WIDTH)))
-    height = max(256, min(4096, int(payload.get("height") or comfy_backend.QWEN_HEIGHT)))
+    # Only fall back to the default here. All clamping lives in
+    # comfy_backend.build_workflow, which scales width and height by a single
+    # factor: clamping them separately in two places is what squashed 10:1 into
+    # 16:9.
+    width = int(payload.get("width") or comfy_backend.QWEN_WIDTH)
+    height = int(payload.get("height") or comfy_backend.QWEN_HEIGHT)
 
     job_begin("comfy", label=prompt[:40])
 

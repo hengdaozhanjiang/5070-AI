@@ -60,6 +60,10 @@ QWEN_CFG = 1.0
 QWEN_WIDTH = 2048
 QWEN_HEIGHT = 1152
 
+# Largest edge any backend accepts, applied as a single scale factor so the
+# aspect ratio survives being clamped.
+QWEN_MAX_EDGE = 4096
+
 # Applied when the caller sends no negative prompt.
 #
 # NOTE: with cfg 1.0 the sampler skips the negative branch entirely, so this
@@ -277,8 +281,28 @@ def build_workflow(prompt: str, negative: str = "", seed: int = -1,
     # The latent is half the target and must be a multiple of 8, so the target
     # has to be a multiple of 16. Snapping to 8 would let 1080 through and the
     # result would silently come back as 1088.
-    width = max(256, min(QWEN_WIDTH * 2, (int(width) // 16) * 16))
-    height = max(256, min(QWEN_HEIGHT * 2, (int(height) // 16) * 16))
+    #
+    # Clamp with a single scale factor. Clamping width and height against
+    # separate limits (4096 / 2304) squashed a 1:1 request into 16:9.
+    width = max(1, int(width))
+    height = max(1, int(height))
+
+    # Scale by a single factor so the aspect ratio survives. Only two things
+    # trigger it: an edge above the cap, or an edge below the floor. Clamping
+    # each edge separately would turn 9999x1000 into 4096x2304 (10:1 -> 16:9).
+    scale = 1.0
+    if max(width, height) > QWEN_MAX_EDGE:
+        scale = QWEN_MAX_EDGE / max(width, height)
+    if min(width * scale, height * scale) < 256:
+        # shrink-to-fit already applied; raise the whole pair instead so the
+        # short edge clears the floor without stretching the long one
+        scale = max(scale, 256 / min(width, height))
+    if scale != 1.0:
+        width = int(width * scale)
+        height = int(height * scale)
+
+    width = max(256, (width // 16) * 16)
+    height = max(256, (height // 16) * 16)
 
     # The graph follows ComfyUI's own Qwen-Image template: a plain
     # EmptySD3LatentImage carries the requested width and height directly.

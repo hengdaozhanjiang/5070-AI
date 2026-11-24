@@ -1023,6 +1023,13 @@ function newChat(modelId) {
   state.chats.unshift(chat);
   state.chat = chat;
   persist();
+  // A fresh conversation in a drawing mode must not inherit whatever cfg the
+  // last SD-style session left in the controls; reset to the drawing backend's
+  // own defaults.
+  if (model === 'qwen') {
+    applyFamilyDefaults({ family: 'sdxl', defaults: QWEN_DEFAULTS });
+    applyQwenDefaults();
+  }
   renderAll();
   $('#input').focus();
   return chat;
@@ -1284,9 +1291,13 @@ async function qwenInChat(chat, text) {
   // dataset.touched vanished on reload, so after restarting the app every Qwen
   // picture fell back to 1024x1024 and the custom size looked forgotten.
   // drawSize === 'custom' is persisted, so it survives.
-  const saved = state.settings || {};
-  const customised = saved.drawSize === 'custom';
-  const size = customised ? currentSize() : '2048x1152';
+  // Read whatever the panel is set to - preset or custom alike.
+  //
+  // This used to be `customised ? currentSize() : '2048x1152'`, which meant a
+  // preset picked in the panel (720p, portrait, ...) was ignored in the chat
+  // path and every picture came out 2K. currentSize() already falls back to a
+  // sane default when the panel has never been touched.
+  const size = currentSize();
   const r = await generateImage({
     prompt: text,
     negative: $('#draw-neg') ? $('#draw-neg').value : '',
@@ -2596,8 +2607,12 @@ function applyFamilyDefaults(hit) {
    the range it clamps to, because odd numbers make SD produce smeared edges. */
 function currentSize() {
   const sel = $('#draw-size');
-  if (!sel) return '832x832';
-  if (sel.value !== 'custom') return sel.value || '832x832';
+  // 832x832 is the SD-era factory default; when Qwen drives, 2K is the fallback.
+  const fallback = state.drawBackend === 'comfy' || comfyReady()
+    ? `${QWEN_DEFAULTS.width}x${QWEN_DEFAULTS.height}`
+    : '832x832';
+  if (!sel) return fallback;
+  if (sel.value !== 'custom') return sel.value || fallback;
   const w = snapSize(Number(($('#draw-w') || {}).value));
   const h = snapSize(Number(($('#draw-h') || {}).value));
   return `${w}x${h}`;
@@ -2605,7 +2620,7 @@ function currentSize() {
 
 /* Round to a multiple of 8 and clamp to what the services accept. */
 function snapSize(n) {
-  if (!isFinite(n) || n <= 0) return 1152;
+  if (!isFinite(n) || n <= 0) return QWEN_DEFAULTS.height;
   // 16, not 8: the latent is half the target and must be a multiple of 8, so a
   // target of 1920x1080 would silently come back as 1920x1088.
   const max = maxSizeForBackend();
@@ -2648,8 +2663,10 @@ function syncSizeUi(fam) {
     msgs.push('宽高要填正整数');
     level = 'bad';
   } else {
-    if (w % 8 || h % 8) {
-      msgs.push('会自动对齐到 8 的倍数');
+    // Must match snapSize(): 16, not 8. Saying 8 while snapping to 16 is a lie
+    // the user notices the moment the file comes back 896 instead of 900.
+    if (w % 16 || h % 16) {
+      msgs.push(`会从 ${Math.round(w)}×${Math.round(h)} 对齐到 ${snapSize(w)}×${snapSize(h)}`);
       level = 'warn';
     }
     const maxEdge = maxSizeForBackend();
@@ -2673,6 +2690,9 @@ function syncSizeUi(fam) {
     }
     if (!msgs.length) {
       msgs.push(`将生成 ${snapSize(w)}×${snapSize(h)}`);
+    } else if (level === 'warn') {
+      // append the concrete output size so there is no guessing
+      msgs.push(`实际出图 ${snapSize(w)}×${snapSize(h)}`);
     }
   }
   note.textContent = msgs.join('；');
@@ -2726,10 +2746,30 @@ function bindSizeInputs() {
     swap.addEventListener('click', () => {
       const iw = $('#draw-w');
       const ih = $('#draw-h');
-      if (!iw || !ih) return;
-      const t = iw.value;
-      iw.value = ih.value;
-      ih.value = t;
+      const sel = $('#draw-size');
+      if (!iw || !ih || !sel) return;
+      // Swap whatever the panel is currently asking for, not just the two
+      // inputs: when a preset was selected those inputs are only a mirror, so
+      // swapping them changed nothing that currentSize() reports.
+      const [cw, ch] = (sel.value === 'custom' ? currentSize() : sel.value).split('x');
+      const a = Number(cw) || Number(iw.value) || QWEN_DEFAULTS.width;
+      const b = Number(ch) || Number(ih.value) || QWEN_DEFAULTS.height;
+      // a swapped size is by definition a custom one
+      if (![...sel.options].some(o => o.value === `${b}x${a}`)) {
+        const opt = document.createElement('option');
+        opt.value = `${b}x${a}`;
+        opt.textContent = `自定义 ${b}×${a}`;
+        sel.appendChild(opt);
+      }
+      sel.value = `${b}x${a}`;
+      if (sel.value !== `${b}x${a}`) {
+        sel.value = 'custom';
+        iw.value = b;
+        ih.value = a;
+      } else {
+        iw.value = b;
+        ih.value = a;
+      }
       syncSizeUi();
       saveDrawDraft();
     });
@@ -2933,6 +2973,27 @@ function showDrawSavedAt() {
 /* The Qwen-Image panel reuses the drawing modal (same prompt, size and
    button) but talks to ComfyUI instead of the SD WebUI. A flag on the state
    decides which backend the generate button reaches. */
+/* The single source of truth for Qwen's generation parameters.
+   Turbo is distilled for 8 steps at cfg 1.0; raising cfg softens the texture.
+   Every place that needs these numbers reads them here instead of repeating
+   literals, which is how the panel and the chat path drifted apart before. */
+const QWEN_DEFAULTS = { width: 2048, height: 1152, steps: 8, cfg: 1 };
+
+/* Push QWEN_DEFAULTS into the drawing controls. */
+function applyQwenDefaults() {
+  const cfg = $('#draw-cfg');
+  if (cfg) cfg.value = String(QWEN_DEFAULTS.cfg);
+  const out = $('#draw-cfg-val');
+  if (out) out.textContent = Number(QWEN_DEFAULTS.cfg).toFixed(1);
+  const steps = $('#draw-steps');
+  if (steps) steps.value = String(QWEN_DEFAULTS.steps);
+  const note = $('#draw-family-note');
+  if (note) {
+    note.textContent = `Qwen-Image 2.1 Turbo · 默认 ${QWEN_DEFAULTS.width}×${QWEN_DEFAULTS.height}，`
+      + `${QWEN_DEFAULTS.steps} 步，CFG ${Number(QWEN_DEFAULTS.cfg).toFixed(1)}`;
+  }
+}
+
 function openQwen(prefill) {
   state.drawBackend = 'comfy';
   const title = $('#draw-title');
@@ -2954,29 +3015,20 @@ function openQwen(prefill) {
   // or preset) back into the controls; only when there is nothing to restore do
   // we fall back to Qwen's native 1024. Doing this in the other order meant the
   // saved numbers were overwritten every time the panel opened.
-  // The size <select> has to contain the options before a value can be set on
-  // it. restoreDrawDraft runs first, so build them here with Qwen's defaults
-  // and then let the saved value win.
-  // Only the SIZE is snapshotted/restored. cfg and steps belong to the backend:
-  // Qwen wants 8 / 1.5, and carrying SD's 28 / 7 over would both look wrong and
-  // reintroduce the dirty-skin problem cfg 1.0 has.
+  // Values come from one place only (QWEN_DEFAULTS), so the panel, the chat
+  // path and the backend cannot drift apart. The <select> must contain its
+  // options before a value can be assigned, hence applyFamilyDefaults first.
   const sizeSnap = snapshotSizeSettings();
-  applyFamilyDefaults({ family: 'sdxl', defaults: { width: 2048, height: 1152,
-                                                   steps: 8, cfg: 1.5 } });
+  applyFamilyDefaults({ family: 'sdxl', defaults: QWEN_DEFAULTS });
   restoreSizeSettings(sizeSnap, { keepCfg: false });
-  const cfgEl = $('#draw-cfg');
-  if (cfgEl) { cfgEl.value = '1'; }
-  const cfgOut = $('#draw-cfg-val');
-  if (cfgOut) cfgOut.textContent = '1.0';
-  const stepsEl = $('#draw-steps');
-  if (stepsEl) stepsEl.value = '8';
+  applyQwenDefaults();
   let hadDraft = false;
   if (prefill == null) hadDraft = restoreDrawDraft();
   if (!hadDraft) {
     const iw = $('#draw-w');
     const ih = $('#draw-h');
-    if (iw) iw.value = 1024;
-    if (ih) ih.value = 1024;
+    if (iw) iw.value = QWEN_DEFAULTS.width;
+    if (ih) ih.value = QWEN_DEFAULTS.height;
   }
 
   const note = $('#draw-family-note');
