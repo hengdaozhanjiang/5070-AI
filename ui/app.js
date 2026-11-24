@@ -1292,7 +1292,7 @@ async function qwenInChat(chat, text) {
     negative: $('#draw-neg') ? $('#draw-neg').value : '',
     size,
     steps: $('#draw-steps') ? Number($('#draw-steps').value) || 8 : 8,
-    cfg: $('#draw-cfg') ? Number($('#draw-cfg').value) || 1.5 : 1.5,
+    cfg: $('#draw-cfg') ? Number($('#draw-cfg').value) || 1 : 1,
     seed: -1,
   });
   stopTrack();
@@ -2965,9 +2965,9 @@ function openQwen(prefill) {
                                                    steps: 8, cfg: 1.5 } });
   restoreSizeSettings(sizeSnap, { keepCfg: false });
   const cfgEl = $('#draw-cfg');
-  if (cfgEl) { cfgEl.value = '1.5'; }
+  if (cfgEl) { cfgEl.value = '1'; }
   const cfgOut = $('#draw-cfg-val');
-  if (cfgOut) cfgOut.textContent = '1.5';
+  if (cfgOut) cfgOut.textContent = '1.0';
   const stepsEl = $('#draw-steps');
   if (stepsEl) stepsEl.value = '8';
   let hadDraft = false;
@@ -2980,7 +2980,7 @@ function openQwen(prefill) {
   }
 
   const note = $('#draw-family-note');
-  if (note) note.textContent = 'Qwen-Image 2.1 Turbo · 默认 2K，8 步，CFG 1.5';
+  if (note) note.textContent = 'Qwen-Image 2.1 Turbo · 默认 2K，8 步，CFG 1.0';
   if (prefill != null) $('#draw-prompt').value = prefill;
 
   // controlnet is an SD concept; hide it while Qwen drives

@@ -59,8 +59,19 @@
     }
   ],
   "default_model": "9b",
-  "sd": {
+  "_comfy": "Qwen 图像（ComfyUI）。绘图默认走这里。enabled 改成 false 就关闭绘图。dir 指向 ComfyUI 主目录（含 main.py 的那层）。python 用系统 Python 3.12，不要用便携版自带的 3.11。",
+  "comfy": {
     "enabled": true,
+    "label": "Qwen 图像",
+    "dir": "C:\\AI\\ComfyUI",
+    "python": "C:\\Python312\\python.exe",
+    "port": 8188,
+    "unet": "qwen-image-2.1-turbo-Q4_K_M.gguf",
+    "clip": "text_encoders\\qwen3vl_8b_w4a8.safetensors",
+    "vae": "qwen_image_2.1_vae_bf16.safetensors"
+  },
+  "sd": {
+    "enabled": false,
     "label": "SD 绘图",
     "_dir": "Stable Diffusion WebUI 的安装目录（AUTOMATIC1111 或秋葉整合包）。留空则禁用绘图。",
     "dir": "C:\\AI\\sd-webui",
@@ -76,18 +87,8 @@
     "_style_guard": "附加到每条提示词末尾，用来稳住画风。不想要就设成空字符串。",
     "style_guard": "detailed skin texture, natural lighting, film grain, sharp focus",
     "_checkpoints": "可选。给 checkpoint 起好记的显示名和说明；键名是文件名前缀。",
-    "checkpoints": {
-      "sd_xl_base_1.0": {
-        "display": "SDXL Base 1.0 · 官方",
-        "note": "Stability 官方 SDXL 基础模型，原生 1024×1024。12GB 显存实测可用（占约 7.6GB）。",
-        "tags": "官方 · 通用 · 1024"
-      },
-      "RealVisXL_V5.0_fp16": {
-        "display": "RealVisXL V5.0 · 写实",
-        "note": "RealVisXL V5.0 写实微调，约 6.5GB。通用写实最好用的一档，openrail++ 许可可商用。",
-        "tags": "写实 · 人像风景 · SDXL"
-      }
-    }
+    "checkpoints": {},
+    "_note": "绘图默认走 Qwen 图像（下面的 comfy 段）。要用 SD WebUI 才把 enabled 改成 true。"
   },
   "tts": {
     "enabled": true,

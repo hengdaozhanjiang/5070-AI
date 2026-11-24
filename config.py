@@ -62,7 +62,7 @@ DEFAULTS = {
     "default_model": "9b",
     # Stable Diffusion WebUI (AUTOMATIC1111 / 秋葉整合包)
     "sd": {
-        "enabled": True,
+        "enabled": False,
         "label": "SD 绘图",
         "dir": "",
         "python": "",
@@ -72,6 +72,19 @@ DEFAULTS = {
         "style_guard": "detailed skin texture, natural lighting, film grain, sharp focus",
         # per-checkpoint display name / note shown in the drawing panel
         "checkpoints": {},
+    },
+    # Qwen-Image via ComfyUI - the drawing backend that is actually used.
+    # SD below is kept for people who still run AUTOMATIC1111.
+    "comfy": {
+        "enabled": True,
+        "label": "Qwen 图像",
+        "dir": "",
+        "python": "",
+        "port": 8188,
+        # the three files Qwen-Image needs, relative to ComfyUI's models/
+        "unet": "qwen-image-2.1-turbo-Q4_K_M.gguf",
+        "clip": "text_encoders\\qwen3vl_8b_w4a8.safetensors",
+        "vae": "qwen_image_2.1_vae_bf16.safetensors",
     },
     # IndexTTS2 text-to-speech
     "tts": {

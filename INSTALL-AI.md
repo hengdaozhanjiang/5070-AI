@@ -224,6 +224,9 @@ copy config.example.json config.json
 
 这些不是必须的，用户只想要对话就跳过整步。
 
+> **注意：当前这台机器上 SD 已卸载。**
+> 下面这段留着，将来想恢复 SD 时照做；如果只用 Qwen-Image 可以跳过。
+
 **SD 绘图**（SD1.5 / SDXL）
 
 ```jsonc

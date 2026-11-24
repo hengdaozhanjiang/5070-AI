@@ -23,27 +23,35 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # --- configuration ----------------------------------------------------------
 
-COMFY_DIR = r"D:\AI\ComfyUI_windows_portable\ComfyUI"
-COMFY_PYTHON = r"C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe"
-COMFY_PORT = 8188
+# Values come from config.json's "comfy" section when present. The literals
+# below are only a fallback for a machine that has not been configured yet -
+# hard-coding them meant the config could not actually move ComfyUI.
+from config import CFG  # noqa: E402  (imported late to avoid a cycle)
+
+_CC = CFG.get("comfy") or {}
+
+COMFY_DIR = _CC.get("dir") or r"D:\AI\ComfyUI_windows_portable\ComfyUI"
+COMFY_PYTHON = _CC.get("python") or r"C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe"
+COMFY_PORT = int(_CC.get("port") or 8188)
 
 # the three pieces Qwen-Image needs
-QWEN_UNET = "qwen-image-2.1-turbo-Q4_K_M.gguf"
-QWEN_CLIP = r"text_encoders\qwen3vl_8b_w4a8.safetensors"
-QWEN_VAE = "qwen_image_2.1_vae_bf16.safetensors"
+QWEN_UNET = _CC.get("unet") or "qwen-image-2.1-turbo-Q4_K_M.gguf"
+QWEN_CLIP = _CC.get("clip") or r"text_encoders\qwen3vl_8b_w4a8.safetensors"
+QWEN_VAE = _CC.get("vae") or "qwen_image_2.1_vae_bf16.safetensors"
 
-# Turbo is distilled: it wants few steps and a low cfg.
+# Turbo is distilled: 8 steps, cfg 1.0 - the values it was trained for.
 #
-# cfg 1.0 is what the model card suggests, but it disables the negative branch
-# entirely - guidance is skipped when cfg <= 1 - so prompts that ask for heavy
-# skin texture ("detailed skin pores", "every wrinkle") come back looking dirty
-# and there is no way to push back.
+# An earlier version raised cfg to 1.5 because portraits at 1024 px looked
+# dirty. That diagnosis was wrong: the "dirt" was detail with nowhere to go,
+# not noise. At 2K the same cfg 1.0 renders crisp fur and natural skin, while
+# 1.5 goes soft and smeared because guidance flattens the texture.
 #
-# 1.5 is the measured sweet spot: the negative prompt takes effect, skin looks
-# clean, and it has not yet gone plastic the way cfg 3 does. Cost is ~8 s more
-# per picture on a 5070, which is worth it.
+# Measured on a 5070 at 2048x1152:
+#   cfg 1.0 / 8 steps   34 s, 3330 KB - sharp, best
+#   cfg 1.0 / 16 steps  58 s, 3501 KB - over-sharpened, cracked skin
+#   cfg 1.5 / 8 steps   58 s, 2945 KB - smeared, soft
 QWEN_STEPS = 8
-QWEN_CFG = 1.5
+QWEN_CFG = 1.0
 
 # Qwen-Image is natively high resolution; 1024 was a needless downgrade.
 #
@@ -53,6 +61,10 @@ QWEN_WIDTH = 2048
 QWEN_HEIGHT = 1152
 
 # Applied when the caller sends no negative prompt.
+#
+# NOTE: with cfg 1.0 the sampler skips the negative branch entirely, so this
+# list is inert in the default configuration. It is kept for people who raise
+# cfg above 1.
 #
 # Asking for "detailed skin pores" or similar at 1024 px makes Qwen-Image draw
 # texture it cannot resolve, which reads as dirty/noisy skin. These words push
@@ -197,6 +209,7 @@ def stop() -> dict:
 def probe() -> dict:
     """State for the sidebar card."""
     info = {"label": "Qwen 图像", "up": is_up(), "loading": False,
+            "enabled": bool(_CC.get("enabled", True)),
             "port": COMFY_PORT, "dir": COMFY_DIR, "error": None,
             "models": [], "ready": False}
     if not info["up"]:
