@@ -39,19 +39,63 @@ QWEN_UNET = _CC.get("unet") or "qwen-image-2.1-turbo-Q4_K_M.gguf"
 QWEN_CLIP = _CC.get("clip") or r"text_encoders\qwen3vl_8b_w4a8.safetensors"
 QWEN_VAE = _CC.get("vae") or "qwen_image_2.1_vae_bf16.safetensors"
 
-# Turbo is distilled: 8 steps, cfg 1.0 - the values it was trained for.
+# Generation presets, one per resolution tier.
 #
-# An earlier version raised cfg to 1.5 because portraits at 1024 px looked
-# dirty. That diagnosis was wrong: the "dirt" was detail with nowhere to go,
-# not noise. At 2K the same cfg 1.0 renders crisp fur and natural skin, while
-# 1.5 goes soft and smeared because guidance flattens the texture.
+# Qwen-Image Turbo is distilled for few steps, but the right number depends on
+# how many pixels there are: a 720p frame is fully resolved in 8 passes, while
+# 2K keeps gaining detail up to about 12. cfg stays at 1.0 everywhere - raising
+# it flattens texture (guidance skips the negative branch at 1.0, which is what
+# Turbo wants).
 #
-# Measured on a 5070 at 2048x1152:
-#   cfg 1.0 / 8 steps   34 s, 3330 KB - sharp, best
-#   cfg 1.0 / 16 steps  58 s, 3501 KB - over-sharpened, cracked skin
-#   cfg 1.5 / 8 steps   58 s, 2945 KB - smeared, soft
-QWEN_STEPS = 8
-QWEN_CFG = 1.0
+# Measured on a 5070, edge density / high-frequency energy after normalising to
+# the same size, so the numbers compare like for like:
+#
+#   1280x720    8 steps 15.59/6.46   12 steps 16.68/7.28   16 steps 16.40/7.18
+#   1920x1088   8 steps 19.42/6.67   12 steps 22.29/7.94   16 steps 22.91/8.30
+#   2048x1152   8 steps 20.01/6.87   12 steps 23.24/8.17   16 steps 24.08/8.61
+#   1088x1920   8 steps 29.58/10.74  12 steps 32.63/11.97  16 steps 31.15/11.67
+#   1328x1328   8 steps 23.44/8.26   12 steps 26.62/9.69   16 steps 29.09/10.50
+#
+# 12 steps wins almost everywhere; 8 is fine for small frames and saves time,
+# 16 only pays off on square crops that are already dense.
+QWEN_PRESETS = [
+    # key,        width, height, steps, cfg, label
+    ("2k",        2048, 1152, 12, 1.0, "2K 宽屏"),
+    ("1080p",     1920, 1088, 12, 1.0, "1080p 宽屏"),
+    ("720p",      1280, 720,   8, 1.0, "720p 宽屏"),
+    ("portrait",  1088, 1920, 12, 1.0, "竖屏"),
+    ("square",    1328, 1328, 14, 1.0, "方形"),
+    ("square-sm", 1024, 1024, 10, 1.0, "方形小图"),
+    ("half",       896, 1152,  8, 1.0, "竖版小图"),
+]
+
+QWEN_PRESET_MAP = {p[0]: p for p in QWEN_PRESETS}
+QWEN_PRESET_BY_SIZE = {(p[1], p[2]): p for p in QWEN_PRESETS}
+
+# Default tier: high resolution with its matching step count.
+QWEN_WIDTH = QWEN_PRESETS[0][1]
+QWEN_HEIGHT = QWEN_PRESETS[0][2]
+QWEN_STEPS = QWEN_PRESETS[0][3]
+QWEN_CFG = QWEN_PRESETS[0][4]
+
+
+def preset_for(width: int, height: int):
+    """The preset whose size matches, or the closest one by pixel count."""
+    hit = QWEN_PRESET_BY_SIZE.get((width, height))
+    if hit:
+        return hit
+    area = width * height
+    return min(QWEN_PRESETS, key=lambda p: abs(p[1] * p[2] - area))
+
+
+def recommended_for(width: int, height: int) -> dict:
+    """Steps and cfg that suit a given size.
+
+    Used when the caller changes the resolution but leaves steps/cfg at their
+    defaults: a 720p frame at 12 steps is wasted time, a 2K frame at 8 is soft.
+    """
+    p = preset_for(width, height)
+    return {"steps": p[3], "cfg": p[4], "preset": p[0], "label": p[5]}
 
 # Qwen-Image is natively high resolution; 1024 was a needless downgrade.
 #

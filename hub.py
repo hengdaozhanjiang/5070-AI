@@ -1718,14 +1718,24 @@ def comfy_generate(payload: dict) -> dict:
     if not negative:
         negative = comfy_backend.QWEN_NEGATIVE
     seed = int(payload.get("seed") or -1)
-    steps = max(1, min(60, int(payload.get("steps") or comfy_backend.QWEN_STEPS)))
-    cfg = float(payload.get("cfg_scale") or comfy_backend.QWEN_CFG)
-    # Only fall back to the default here. All clamping lives in
-    # comfy_backend.build_workflow, which scales width and height by a single
-    # factor: clamping them separately in two places is what squashed 10:1 into
-    # 16:9.
+
+    # Size first, then let it decide the sampling parameters.
+    #
+    # All clamping lives in build_workflow, which scales width and height by a
+    # single factor: clamping them separately in two places is what squashed
+    # 10:1 into 16:9.
     width = int(payload.get("width") or comfy_backend.QWEN_WIDTH)
     height = int(payload.get("height") or comfy_backend.QWEN_HEIGHT)
+
+    # Steps and cfg track the resolution unless the caller was explicit. A 720p
+    # frame at 12 steps wastes time; a 2K frame at 8 comes back soft. Omitting
+    # them (or sending 0 / null) means "pick what suits this size".
+    rec = comfy_backend.recommended_for(width, height)
+    raw_steps = payload.get("steps")
+    raw_cfg = payload.get("cfg_scale")
+    steps = int(raw_steps) if raw_steps not in (None, "", 0) else rec["steps"]
+    cfg = float(raw_cfg) if raw_cfg not in (None, "", 0) else rec["cfg"]
+    steps = max(1, min(60, steps))
 
     job_begin("comfy", label=prompt[:40])
 
@@ -2237,6 +2247,12 @@ class Handler(BaseHTTPRequestHandler):
                 "tts": tts_probe(),
                 "stt": stt_probe(),
                 "comfy": comfy_probe(),
+                # the size->steps/cfg table, so the UI can follow it when the
+                # user changes resolution instead of guessing
+                "qwenPresets": [
+                    {"key": k, "width": w, "height": h, "steps": st, "cfg": c, "label": lb}
+                    for k, w, h, st, c, lb in comfy_backend.QWEN_PRESETS
+                ],
                 "hub": {"port": PORT, "name": APP_NAME,
                         "version": APP_VERSION,
                         # configuration mistakes worth showing in the UI
@@ -2296,6 +2312,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "message": "bad payload"}, 400)
                 return
             self._json(comfy_generate(payload if isinstance(payload, dict) else {}))
+        elif path == "/api/_test/result":
+            # Automated UI checks post their outcome here so a driver script
+            # can read it back. Lives in do_POST because it carries a body.
+            try:
+                payload = json.loads(body or b"{}")
+            except Exception:  # noqa: BLE001
+                payload = {}
+            try:
+                with open(os.path.join(UI_DIR, "_result.json"), "w",
+                          encoding="utf-8") as fh:
+                    json.dump(payload, fh, ensure_ascii=False)
+            except OSError:
+                pass
+            self._json({"ok": True})
         elif path == "/api/stt":
             # raw audio body, not JSON: the browser posts a Blob directly
             audio = body or b""

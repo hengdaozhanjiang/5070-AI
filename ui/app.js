@@ -29,6 +29,9 @@ const state = {
   comfy: null,          // Qwen-Image / ComfyUI status from /api/state
   drawBackend: 'sd',    // which service the drawing panel currently drives
   drawFamily: 'sd15',   // sd15 / sdxl, drives the size hints in the panel
+  qwenPresets: [],      // size -> recommended steps/cfg, from the hub
+  manualSteps: false,   // user typed a step count - do not auto-change it
+  manualCfg: false,     // user typed a cfg - do not auto-change it
 };
 
 function loadSettings() {
@@ -1027,8 +1030,13 @@ function newChat(modelId) {
   // last SD-style session left in the controls; reset to the drawing backend's
   // own defaults.
   if (model === 'qwen') {
-    applyFamilyDefaults({ family: 'sdxl', defaults: QWEN_DEFAULTS });
-    applyQwenDefaults();
+    const d = qwenDefaults();
+    applyFamilyDefaults({ family: 'sdxl',
+      defaults: { width: d.width, height: d.height, steps: d.steps, cfg: d.cfg } });
+    // a new conversation starts from the preset, not from a hand-tuned value
+    state.manualSteps = false;
+    state.manualCfg = false;
+    applyQwenDefaults(undefined, false);
   }
   renderAll();
   $('#input').focus();
@@ -2101,6 +2109,7 @@ async function pollState(force = false) {
     state.sd = data.sd || null;
     state.tts = data.tts || null;
     state.comfy = data.comfy || null;
+    if (data.qwenPresets) state.qwenPresets = data.qwenPresets;
     const sdNow = sdReady();
     const ttsNow = ttsReady();
     const qwenNow = comfyReady();
@@ -2636,6 +2645,8 @@ function bindQuickGen() {
       const h = $('#draw-h');
       if (w) $('#qg-w').value = w.value;
       if (h) $('#qg-h').value = h.value;
+    } else {
+      applyRecommendedFor(v);
     }
     renderQuickGen();
     saveDrawDraft();
@@ -2670,6 +2681,8 @@ function bindQuickGen() {
         target.value = el.value;
         target.dispatchEvent(new Event('input', { bubbles: true }));
       }
+      if (id === '#qg-steps') state.manualSteps = true;
+      else state.manualCfg = true;
       saveDrawDraft();
     });
   });
@@ -2694,12 +2707,12 @@ function renderQuickGen() {
   if (panelSteps && panelCfg && !state._qwenSeeded && comfyReady()) {
     // Build the size options first: a saved 'custom' cannot be assigned to a
     // select that has no such option yet, which left the composer stuck.
-    applyFamilyDefaults({ family: 'sdxl', defaults: QWEN_DEFAULTS });
+    applyFamilyDefaults({ family: 'sdxl', defaults: qwenDefaults() });
     restoreDrawDraft();
     // restoreDrawDraft also brings back steps/cfg from the saved draft, which
     // are SD-era numbers. In Qwen mode those two belong to the backend, so set
     // them last and let them win.
-    applyQwenDefaults();
+    applyQwenDefaults(undefined, true);
     state._qwenSeeded = true;
   }
 
@@ -2743,7 +2756,7 @@ function currentSize() {
   const sel = $('#draw-size');
   // 832x832 is the SD-era factory default; when Qwen drives, 2K is the fallback.
   const fallback = state.drawBackend === 'comfy' || comfyReady()
-    ? `${QWEN_DEFAULTS.width}x${QWEN_DEFAULTS.height}`
+    ? `${qwenDefaults().width}x${qwenDefaults().height}`
     : '832x832';
   if (!sel) return fallback;
   if (sel.value !== 'custom') return sel.value || fallback;
@@ -2753,8 +2766,47 @@ function currentSize() {
 }
 
 /* Round to a multiple of 8 and clamp to what the services accept. */
+/* Presets served by the hub: size -> recommended steps / cfg.
+
+   Kept server-side so the numbers live next to the measurements that produced
+   them, and the UI just follows. */
+function qwenPresets() {
+  return state.qwenPresets || [];
+}
+
+/* The preset matching a size, or the nearest by pixel count. */
+function presetForSize(size) {
+  const list = qwenPresets();
+  if (!list.length) return null;
+  const [w, h] = String(size).split('x').map(Number);
+  const exact = list.find(p => p.width === w && p.height === h);
+  if (exact) return exact;
+  const area = (w || 0) * (h || 0);
+  return list.reduce((best, p) =>
+    Math.abs(p.width * p.height - area) < Math.abs(best.width * best.height - area) ? p : best);
+}
+
+/* Apply the steps/cfg that suit a size, but only when the user has not dialled
+   them in by hand - an explicit choice must survive a size change. */
+function applyRecommendedFor(size, force) {
+  const p = presetForSize(size);
+  if (!p) return;
+  // leave a hand-picked value alone unless the caller insists
+  if (!force && state.manualSteps && state.manualCfg) return;
+  const stepsEl = $('#draw-steps');
+  const cfgEl = $('#draw-cfg');
+  if (stepsEl && (force || !state.manualSteps)) stepsEl.value = String(p.steps);
+  if (cfgEl && (force || !state.manualCfg)) cfgEl.value = String(p.cfg);
+  const out = $('#draw-cfg-val');
+  if (out) out.textContent = Number(cfgEl ? cfgEl.value : p.cfg).toFixed(1);
+  const qs = $('#qg-steps');
+  const qc = $('#qg-cfg');
+  if (qs && (force || !state.manualSteps)) qs.value = String(stepsEl ? stepsEl.value : p.steps);
+  if (qc && (force || !state.manualCfg)) qc.value = String(cfgEl ? cfgEl.value : p.cfg);
+}
+
 function snapSize(n) {
-  if (!isFinite(n) || n <= 0) return QWEN_DEFAULTS.height;
+  if (!isFinite(n) || n <= 0) return qwenDefaults().height;
   // 16, not 8: the latent is half the target and must be a multiple of 8, so a
   // target of 1920x1080 would silently come back as 1920x1088.
   const max = maxSizeForBackend();
@@ -2861,6 +2913,8 @@ function bindSizeInputs() {
     sel.dataset.prev = sel.value === 'custom'
       ? (sel.dataset.prev || '832x832') : sel.value;
     syncSizeUi();
+    // a new resolution brings its own step count unless the user set one
+    applyRecommendedFor(currentSize());
     saveDrawDraft();
   });
 
@@ -2875,6 +2929,17 @@ function bindSizeInputs() {
     }
   });
 
+  // A step count or cfg the user typed is their choice: changing the
+  // resolution must not quietly replace it.
+  const stepsEl = $('#draw-steps');
+  if (stepsEl) {
+    stepsEl.addEventListener('input', () => { state.manualSteps = true; });
+  }
+  const cfgEl = $('#draw-cfg');
+  if (cfgEl) {
+    cfgEl.addEventListener('input', () => { state.manualCfg = true; });
+  }
+
   const swap = $('#draw-swap');
   if (swap) {
     swap.addEventListener('click', () => {
@@ -2886,8 +2951,8 @@ function bindSizeInputs() {
       // inputs: when a preset was selected those inputs are only a mirror, so
       // swapping them changed nothing that currentSize() reports.
       const [cw, ch] = (sel.value === 'custom' ? currentSize() : sel.value).split('x');
-      const a = Number(cw) || Number(iw.value) || QWEN_DEFAULTS.width;
-      const b = Number(ch) || Number(ih.value) || QWEN_DEFAULTS.height;
+      const a = Number(cw) || Number(iw.value) || qwenDefaults().width;
+      const b = Number(ch) || Number(ih.value) || qwenDefaults().height;
       // a swapped size is by definition a custom one
       if (![...sel.options].some(o => o.value === `${b}x${a}`)) {
         const opt = document.createElement('option');
@@ -3111,20 +3176,38 @@ function showDrawSavedAt() {
    Turbo is distilled for 8 steps at cfg 1.0; raising cfg softens the texture.
    Every place that needs these numbers reads them here instead of repeating
    literals, which is how the panel and the chat path drifted apart before. */
-const QWEN_DEFAULTS = { width: 2048, height: 1152, steps: 8, cfg: 1 };
+/* Fallback values, used before the hub's preset table arrives. The hub sends
+   the measured ones; see comfy_backend.QWEN_PRESETS for how they were chosen. */
+const QWEN_FALLBACK = { width: 2048, height: 1152, steps: 12, cfg: 1 };
 
-/* Push QWEN_DEFAULTS into the drawing controls. */
-function applyQwenDefaults() {
+/* The active preset: the one matching the current size, else the first. */
+function qwenDefaults(size) {
+  const list = qwenPresets();
+  if (!list.length) return QWEN_FALLBACK;
+  const p = size ? presetForSize(size) : list[0];
+  return p || QWEN_FALLBACK;
+}
+
+/* Push the preset's values into the drawing controls.
+
+   `keepManual` leaves a value the user typed alone: changing the resolution
+   should not silently overwrite a step count they picked by hand. */
+function applyQwenDefaults(size, keepManual) {
+  const d = qwenDefaults(size);
   const cfg = $('#draw-cfg');
-  if (cfg) cfg.value = String(QWEN_DEFAULTS.cfg);
-  const out = $('#draw-cfg-val');
-  if (out) out.textContent = Number(QWEN_DEFAULTS.cfg).toFixed(1);
   const steps = $('#draw-steps');
-  if (steps) steps.value = String(QWEN_DEFAULTS.steps);
+  if (cfg && !(keepManual && state.manualCfg)) cfg.value = String(d.cfg);
+  if (steps && !(keepManual && state.manualSteps)) steps.value = String(d.steps);
+  const out = $('#draw-cfg-val');
+  if (out) out.textContent = Number(cfg ? cfg.value : d.cfg).toFixed(1);
+  const qs = $('#qg-steps');
+  const qc = $('#qg-cfg');
+  if (qs && !(keepManual && state.manualSteps)) qs.value = String(steps ? steps.value : d.steps);
+  if (qc && !(keepManual && state.manualCfg)) qc.value = String(cfg ? cfg.value : d.cfg);
   const note = $('#draw-family-note');
   if (note) {
-    note.textContent = `Qwen-Image 2.1 Turbo · 默认 ${QWEN_DEFAULTS.width}×${QWEN_DEFAULTS.height}，`
-      + `${QWEN_DEFAULTS.steps} 步，CFG ${Number(QWEN_DEFAULTS.cfg).toFixed(1)}`;
+    note.textContent = `Qwen-Image 2.1 Turbo · ${d.width}×${d.height}，`
+      + `${steps ? steps.value : d.steps} 步，CFG ${Number(cfg ? cfg.value : d.cfg).toFixed(1)}`;
   }
 }
 
@@ -3149,20 +3232,20 @@ function openQwen(prefill) {
   // or preset) back into the controls; only when there is nothing to restore do
   // we fall back to Qwen's native 1024. Doing this in the other order meant the
   // saved numbers were overwritten every time the panel opened.
-  // Values come from one place only (QWEN_DEFAULTS), so the panel, the chat
+  // Values come from one place only (the hub's preset table), so the panel, the chat
   // path and the backend cannot drift apart. The <select> must contain its
   // options before a value can be assigned, hence applyFamilyDefaults first.
   const sizeSnap = snapshotSizeSettings();
-  applyFamilyDefaults({ family: 'sdxl', defaults: QWEN_DEFAULTS });
+  applyFamilyDefaults({ family: 'sdxl', defaults: qwenDefaults() });
   restoreSizeSettings(sizeSnap, { keepCfg: false });
-  applyQwenDefaults();
+  applyQwenDefaults(currentSize(), true);
   let hadDraft = false;
   if (prefill == null) hadDraft = restoreDrawDraft();
   if (!hadDraft) {
     const iw = $('#draw-w');
     const ih = $('#draw-h');
-    if (iw) iw.value = QWEN_DEFAULTS.width;
-    if (ih) ih.value = QWEN_DEFAULTS.height;
+    if (iw) iw.value = qwenDefaults().width;
+    if (ih) ih.value = qwenDefaults().height;
   }
 
   const note = $('#draw-family-note');
