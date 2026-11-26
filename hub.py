@@ -2659,8 +2659,21 @@ def load_saved_geometry() -> tuple[int, int, int, int] | None:
     if area:
         ax, ay, aw, ah = area
         x, y, w, h = g
-        if w < 600 or h < 400 or x + w > ax + aw or y + h > ay + ah or x < ax - 50 or y < ay - 50:
+        # Reject only what is clearly unusable: a window smaller than the
+        # layout needs, or one whose title bar sits off the work area (monitor
+        # removed, resolution changed). A window flush against the top edge is
+        # fine - snapping to 0 is what a maximised window does.
+        if w < 860 or h < 560:
             return None
+        if x + 120 > ax + aw or y + 40 > ay + ah or x < ax - 200 or y < ay - 40:
+            return None
+        # A saved size larger than the screen means the monitor got smaller;
+        # clamp instead of discarding the position.
+        if x + w > ax + aw:
+            w = ax + aw - x
+        if y + h > ay + ah:
+            h = ay + ah - y
+        g = (x, y, max(w, 860), max(h, 560))
     return g
 
 
@@ -2685,15 +2698,19 @@ def window_geometry() -> tuple[int, int, int, int]:
 
     area = screen_work_area()
     if not area:
-        return (120, 80, 1240, 840)
+        return (120, 80, 2200, 1390)
     x, y, sw, sh = area
 
-    # First run: 85% of the work area, hard-capped so a big monitor does not
-    # get a stretched-out window; floored so the two-pane layout never collapses.
-    w = min(int(sw * 0.85), 1340)
-    h = min(int(sh * 0.90), 900)
-    w = max(min(w, sw - 40), 860)
-    h = max(min(h, sh - 40), 560)
+    # First run: most of the work area.
+    #
+    # The old ceilings (1340x900) were sized for a 1080p screen and stretched
+    # the chat and sidebar far too small on anything bigger - at 2560x1392 the
+    # window opened at roughly half the screen. Take 96% now and only fall back
+    # to the smaller floor on genuinely small displays.
+    w = int(sw * 0.96)
+    h = int(sh * 0.98)
+    w = max(min(w, sw - 24), 860)
+    h = max(min(h, sh - 24), 560)
 
     px = x + max(0, (sw - w) // 2)
     py = y + max(0, (sh - h) // 2)
