@@ -285,7 +285,13 @@
           <small id="draw-say" class="hint" style="display:none"></small>
           <!-- Warns when the prompt asks for texture so fine that it renders as
                grain. Measured: those words roughly double flat-area noise. -->
-          <div class="size-note warn" id="draw-prompt-note" hidden></div>
+          <div class="prompt-warn" id="draw-prompt-note" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3 2.6 20h18.8L12 3z"/><path d="M12 9v5"/><path d="M12 17.4v.2"/>
+            </svg>
+            <span id="draw-prompt-note-text"></span>
+          </div>
         </label>
         <div class="draft-actions">
           <button class="mini-btn" id="draw-save" title="把提示词、尺寸、步数、CFG 都存下来，下次打开自动恢复">保存设置</button>

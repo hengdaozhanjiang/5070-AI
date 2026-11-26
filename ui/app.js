@@ -2843,10 +2843,14 @@ const CLOSEUP_WORDS = [
   /face\s+only/i, /portrait\s+of\s+the\s+face/i, /脸部特写/,
 ];
 
-const GRAIN_HINT = '提示词要了很细的皮肤纹理（如「可见毛孔」）。'
-  + '在这个画面尺寸下，一层毛孔只有几个像素宽，渲染出来会像颗粒噪点——'
-  + '这就是皮肤显脏的主因。想让皮肤干净，可以换成「干净光滑的皮肤 / soft skin」。'
-  + '如果你要的就是脸部大特写，忽略这条。';
+/* Built as HTML so the two things the reader needs can be emphasised: what
+   went wrong, and what to type instead. */
+const GRAIN_HINT_HTML =
+  '提示词在要<em>很细的皮肤纹理</em>（毛孔、皮肤纹理这类）。'
+  + '当前画面尺寸下，一层毛孔只有几个像素宽，渲染出来就是<em>颗粒噪点</em>'
+  + '——皮肤显脏主要就是它。'
+  + '想干净就换成「<em>干净光滑的皮肤 / soft skin</em>」；'
+  + '确实要脸部大特写时可以忽略这条。';
 
 /* Show or hide the grain hint for the current prompt. */
 function renderPromptNote() {
@@ -2858,7 +2862,10 @@ function renderPromptNote() {
   const isCloseUp = CLOSEUP_WORDS.some(re => re.test(text));
   const show = wantsGrain && !isCloseUp;
   note.hidden = !show;
-  if (show) note.textContent = GRAIN_HINT;
+  if (!show) return;
+  const target = $('#draw-prompt-note-text');
+  if (target) target.innerHTML = GRAIN_HINT_HTML;
+  else note.innerHTML = GRAIN_HINT_HTML;
 }
 
 function syncSizeUi(fam) {
