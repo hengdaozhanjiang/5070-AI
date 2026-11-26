@@ -283,6 +283,9 @@
           <span>提示词</span>
           <textarea id="draw-prompt" rows="3" placeholder="一个穿风衣的女人站在雨夜的霓虹街头，电影感"></textarea>
           <small id="draw-say" class="hint" style="display:none"></small>
+          <!-- Warns when the prompt asks for texture so fine that it renders as
+               grain. Measured: those words roughly double flat-area noise. -->
+          <div class="size-note warn" id="draw-prompt-note" hidden></div>
         </label>
         <div class="draft-actions">
           <button class="mini-btn" id="draw-save" title="把提示词、尺寸、步数、CFG 都存下来，下次打开自动恢复">保存设置</button>

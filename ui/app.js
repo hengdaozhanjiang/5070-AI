@@ -2820,6 +2820,47 @@ function maxSizeForBackend() {
 }
 
 /* Show or hide the two number inputs and explain any problem with the values. */
+/* Words that push the model toward grain.
+
+   "detailed skin texture, visible pores" roughly doubles flat-area noise
+   (1.37 -> 1.93 in measurement) because at this canvas size a pore is a few
+   pixels wide - indistinguishable from sampling chatter.
+
+   It is not always wrong: in a tight face shot the pores have enough pixels to
+   actually be pores. So the hint only fires when the prompt does not also ask
+   for a close-up. */
+const GRAIN_WORDS = [
+  /visible\s+pores?/i, /skin\s+pores?/i, /毛孔/,
+  /detailed\s+skin\s+texture/i, /skin\s+texture/i, /皮肤纹理/, /肤质纹理/,
+  /every\s+wrinkles?/i, /每条皱纹/, /细纹密布/,
+  /hyper\s*-?\s*realistic\s+skin/i, /超写实皮肤/,
+  /pores?/i,
+];
+
+/* Prompts that legitimately want pore-level detail. */
+const CLOSEUP_WORDS = [
+  /close\s*-?\s*up/i, /macro/i, /特写/, /微距/, /大特写/,
+  /face\s+only/i, /portrait\s+of\s+the\s+face/i, /脸部特写/,
+];
+
+const GRAIN_HINT = '提示词要了很细的皮肤纹理（如「可见毛孔」）。'
+  + '在这个画面尺寸下，一层毛孔只有几个像素宽，渲染出来会像颗粒噪点——'
+  + '这就是皮肤显脏的主因。想让皮肤干净，可以换成「干净光滑的皮肤 / soft skin」。'
+  + '如果你要的就是脸部大特写，忽略这条。';
+
+/* Show or hide the grain hint for the current prompt. */
+function renderPromptNote() {
+  const note = $('#draw-prompt-note');
+  const box = $('#draw-prompt');
+  if (!note || !box) return;
+  const text = box.value || '';
+  const wantsGrain = GRAIN_WORDS.some(re => re.test(text));
+  const isCloseUp = CLOSEUP_WORDS.some(re => re.test(text));
+  const show = wantsGrain && !isCloseUp;
+  note.hidden = !show;
+  if (show) note.textContent = GRAIN_HINT;
+}
+
 function syncSizeUi(fam) {
   const sel = $('#draw-size');
   const box = $('#draw-size-custom');
@@ -2931,6 +2972,12 @@ function bindSizeInputs() {
 
   // A step count or cfg the user typed is their choice: changing the
   // resolution must not quietly replace it.
+  // warn about grain-inducing prompt words as they are typed
+  const promptEl = $('#draw-prompt');
+  if (promptEl) {
+    promptEl.addEventListener('input', () => renderPromptNote());
+  }
+
   const stepsEl = $('#draw-steps');
   if (stepsEl) {
     stepsEl.addEventListener('input', () => { state.manualSteps = true; });
@@ -3204,6 +3251,7 @@ function applyQwenDefaults(size, keepManual) {
   const qc = $('#qg-cfg');
   if (qs && !(keepManual && state.manualSteps)) qs.value = String(steps ? steps.value : d.steps);
   if (qc && !(keepManual && state.manualCfg)) qc.value = String(cfg ? cfg.value : d.cfg);
+  renderPromptNote();
   const note = $('#draw-family-note');
   if (note) {
     note.textContent = `Qwen-Image 2.1 Turbo · ${d.width}×${d.height}，`
