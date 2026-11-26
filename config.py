@@ -82,7 +82,7 @@ DEFAULTS = {
         "python": "",
         "port": 8188,
         # the three files Qwen-Image needs, relative to ComfyUI's models/
-        "unet": "qwen-image-2.1-turbo-Q4_K_M.gguf",
+        "unet": "qwen-image-2.1-turbo-Q6_K.gguf",
         "clip": "text_encoders\\qwen3vl_8b_w4a8.safetensors",
         "vae": "qwen_image_2.1_vae_bf16.safetensors",
     },

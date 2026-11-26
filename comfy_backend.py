@@ -60,14 +60,30 @@ QWEN_VAE = _CC.get("vae") or "qwen_image_2.1_vae_bf16.safetensors"
 # 16 only pays off on square crops that are already dense.
 QWEN_PRESETS = [
     # key,        width, height, steps, cfg, label
-    ("2k",        2048, 1152, 12, 1.0, "2K 宽屏"),
-    ("1080p",     1920, 1088, 12, 1.0, "1080p 宽屏"),
+    #
+    # Steps stay close to what Turbo was distilled for. An earlier revision
+    # raised them per resolution tier on the theory that more pixels need more
+    # passes; measuring flat-area noise showed the opposite - more steps keeps
+    # sharpening the residual sampling chatter, and that chatter is what reads
+    # as dirty skin. On a 1024 square with Q6_K:
+    #
+    #   steps  8   flat noise 0.954   detail 5.89
+    #   steps 12             1.109           6.88
+    #   steps 20             1.299           7.75
+    #   steps 36             1.517           8.55
+    #
+    # The extra "detail" is noise, not structure. 8 steps is the sweet spot;
+    # larger canvases get a little more only because the same noise is spread
+    # over more pixels and reads finer at viewing size.
+    ("2k",        2048, 1152,  8, 1.0, "2K 宽屏"),
+    ("1080p",     1920, 1088,  8, 1.0, "1080p 宽屏"),
     ("720p",      1280, 720,   8, 1.0, "720p 宽屏"),
-    ("portrait",  1088, 1920, 12, 1.0, "竖屏"),
-    ("square",    1328, 1328, 14, 1.0, "方形"),
-    ("square-sm", 1024, 1024, 10, 1.0, "方形小图"),
+    ("portrait",  1088, 1920,  8, 1.0, "竖屏"),
+    ("square",    1328, 1328, 10, 1.0, "方形"),
+    ("square-sm", 1024, 1024,  8, 1.0, "方形小图"),
     ("half",       896, 1152,  8, 1.0, "竖版小图"),
 ]
+
 
 QWEN_PRESET_MAP = {p[0]: p for p in QWEN_PRESETS}
 QWEN_PRESET_BY_SIZE = {(p[1], p[2]): p for p in QWEN_PRESETS}
